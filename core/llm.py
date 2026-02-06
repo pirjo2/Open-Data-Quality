@@ -7,17 +7,37 @@ import json
 
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+# numeric-only reply (prevents "AgeGroup1" -> 1 errors)
 NUM_ONLY_RE = re.compile(r"^\s*([-+]?\d+(?:\.\d+)?)\s*$", re.DOTALL)
-ANSWER_RE = re.compile(r"\banswer\s*[:=]\s*([01])\b", re.IGNORECASE)
+
+# expected formats like:
+# answer: 1
+# evidence: ...
+ANSWER_RE = re.compile(r"(?im)^\s*answer\s*[:=]\s*([01])\s*$")
+EVIDENCE_RE = re.compile(r"(?im)^\s*evidence\s*[:=]\s*(.*)\s*$")
+
+def _sanitize_text(s: str) -> str:
+    """Remove control chars that often break tokenization / confuse models."""
+    if s is None:
+        return ""
+    # Remove NULL bytes and other control chars except \n and \t
+    s = s.replace("\x00", "")
+    s = re.sub(r"[\x01-\x08\x0B\x0C\x0E-\x1F]", " ", s)
+    return s
 
 def format_prompt(prompt_template: str, context: str, N: int) -> str:
+    # Make output formatting stricter -> more reliable parsing
     return (
         prompt_template.strip()
         + "\n\n--- CONTEXT START ---\n"
-        + context.strip()
+        + _sanitize_text(context).strip()
         + "\n--- CONTEXT END ---\n"
         + f"\nN={N}\n"
-        + "\nReturn ONLY the answer in the requested format. No extra text."
+        + "\nIMPORTANT OUTPUT RULES:\n"
+        + "1) First line must be exactly: answer: 0 or answer: 1 (or answer: YYYY-MM-DD / UNKNOWN for date tasks)\n"
+        + "2) Second line must be: evidence: <short quote or none>\n"
+        + "3) Do not add any other lines or text.\n"
     )
 
 @lru_cache(maxsize=4)
@@ -27,9 +47,14 @@ def get_hf_runner(model_name: str):
     Returns a callable: runner(prompt, max_new_tokens) -> generated_text
     """
     import torch
-    from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
+    from transformers import (
+        AutoTokenizer,
+        AutoModelForSeq2SeqLM,
+        AutoModelForCausalLM,
+    )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # ✅ Use slow tokenizer to avoid "byte fallback not implemented" warning
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
 
     kind = "seq2seq"
     try:
@@ -41,8 +66,8 @@ def get_hf_runner(model_name: str):
     model.eval()
 
     def runner(prompt: str, max_new_tokens: int = 64) -> str:
+        prompt = _sanitize_text(prompt)
         with torch.no_grad():
-            # keep input short to avoid long sequence issues
             inputs = tokenizer(
                 prompt,
                 return_tensors="pt",
@@ -59,20 +84,40 @@ def get_hf_runner(model_name: str):
             # causal models often echo prompt
             if kind == "causal" and text.startswith(prompt):
                 text = text[len(prompt):].strip()
+
             return text
 
     return runner
 
 def _parse_value_and_confidence(generated_text: str, typ: str) -> Tuple[Optional[float | str], float]:
-    confidence = 0.0
+    """
+    Parse based on expected strict output:
+      answer: ...
+      evidence: ...
+    """
+    txt = _sanitize_text(generated_text).strip()
 
+    # ---- date ----
     if typ == "date":
-        m = DATE_RE.search(generated_text)
-        if not m or generated_text.strip().upper() == "UNKNOWN":
-            return None, 0.0
-        return m.group(1), 0.8
+        # look for answer line first
+        # allow "answer: UNKNOWN"
+        m_ans = re.search(r"(?im)^\s*answer\s*[:=]\s*(.+?)\s*$", txt)
+        if m_ans:
+            ans = m_ans.group(1).strip()
+            if ans.upper() == "UNKNOWN":
+                return None, 0.0
+            m_date = DATE_RE.search(ans)
+            if m_date:
+                return m_date.group(1), 0.7
 
-    jm = JSON_RE.search(generated_text)
+        # fallback: any date in text
+        m = DATE_RE.search(txt)
+        if not m:
+            return None, 0.0
+        return m.group(1), 0.5
+
+    # ---- JSON (optional advanced format) ----
+    jm = JSON_RE.search(txt)
     if jm:
         try:
             obj = json.loads(jm.group(0))
@@ -85,13 +130,15 @@ def _parse_value_and_confidence(generated_text: str, typ: str) -> Tuple[Optional
         except Exception:
             pass
 
-    am = ANSWER_RE.search(generated_text)
+    # ---- strict answer: 0/1 ----
+    am = ANSWER_RE.search(txt)
     if am:
-        return float(am.group(1)), 0.6
+        return float(am.group(1)), 0.7
 
-    nm = NUM_ONLY_RE.match(generated_text)
+    # ---- numeric-only fallback (rare) ----
+    nm = NUM_ONLY_RE.match(txt)
     if nm:
-        return float(nm.group(1)), 0.8
+        return float(nm.group(1)), 0.5
 
     return None, 0.0
 
@@ -113,6 +160,7 @@ def infer_symbol(
 
     parsed_val, conf = _parse_value_and_confidence(generated_text, typ)
 
+    # If no parse, return 0 for numeric types
     if parsed_val is None:
         if typ in ("binary", "count_0_to_N", "count"):
             return 0.0, generated_text, 0.0

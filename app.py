@@ -96,3 +96,5 @@ if run_btn and uploaded is not None:
         st.write("auto_inputs", details.get("auto_inputs", {}))
         st.write("llm_confidence", details.get("llm_confidence", {}))
         st.write("llm_raw", details.get("llm_raw", {}))
+        st.write("llm_evidence", details.get("llm_evidence", {}))
+
