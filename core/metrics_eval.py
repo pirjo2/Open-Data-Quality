@@ -3,15 +3,17 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple, Optional
 import math
 import re
+import datetime as dt
+
 import pandas as pd
 
 from core.llm import infer_symbol
 
 COND_ALLOWED_RE = re.compile(r"^[0-9a-zA-Z_ .<>=!()+\-*/]+$")
-EVIDENCE_LINE_RE = re.compile(r"(?im)^\s*evidence\s*[:=]\s*(.*)\s*$")
+ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
-
-def _safe_eval_condition(expr: str, env: Dict[str, float]) -> bool:
+def _safe_eval_condition(expr: str, env: Dict[str, Any]) -> bool:
     if not isinstance(expr, str) or not COND_ALLOWED_RE.match(expr):
         return False
     try:
@@ -19,6 +21,26 @@ def _safe_eval_condition(expr: str, env: Dict[str, float]) -> bool:
     except Exception:
         return False
 
+def _parse_date(x: Any) -> Optional[dt.date]:
+    if x is None:
+        return None
+    if isinstance(x, dt.date) and not isinstance(x, dt.datetime):
+        return x
+    try:
+        s = str(x).strip()
+        m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", s)
+        if not m:
+            return None
+        return dt.date.fromisoformat(m.group(1))
+    except Exception:
+        return None
+
+def _days_between(a: Any, b: Any) -> float:
+    da = _parse_date(a)
+    db = _parse_date(b)
+    if not da or not db:
+        return float("nan")
+    return float(abs((da - db).days))
 
 def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
     if node is None:
@@ -28,10 +50,9 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
         v = env.get(node, None)
         if v is None:
             return float("nan")
-        try:
+        if isinstance(v, (int, float)):
             return float(v)
-        except Exception:
-            return float("nan")
+        return float("nan")
 
     if isinstance(node, (int, float)):
         return float(node)
@@ -60,6 +81,11 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
         if op == "abs_diff":
             return abs(_eval_expr(node.get("left"), env) - _eval_expr(node.get("right"), env))
 
+        if op == "days_between":
+            a = env.get(node.get("left"), None) if isinstance(node.get("left"), str) else node.get("left")
+            b = env.get(node.get("right"), None) if isinstance(node.get("right"), str) else node.get("right")
+            return _days_between(a, b)
+
         if op == "conditional":
             for rule in node.get("conditions", []) or []:
                 if not isinstance(rule, dict):
@@ -74,8 +100,7 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
 
     return float("nan")
 
-
-def _profile_df(df: pd.DataFrame, sample_n: int = 2, max_cols: int = 40) -> Dict[str, Any]:
+def _profile_df(df: pd.DataFrame, sample_n: int = 3, max_cols: int = 25) -> Dict[str, Any]:
     profile: Dict[str, Any] = {}
     cols = list(df.columns)[:max_cols]
     for col in cols:
@@ -86,35 +111,118 @@ def _profile_df(df: pd.DataFrame, sample_n: int = 2, max_cols: int = 40) -> Dict
         profile[str(col)] = {"dtype": dtype, "missing": round(missing, 6), "samples": samples}
     return profile
 
-
-def _build_llm_context(df: pd.DataFrame, dataset_description: str = "") -> str:
+def _build_llm_context(df: pd.DataFrame, dataset_description: str, file_name: str, file_ext: str) -> str:
     cols = list(df.columns)
-    profile = _profile_df(df, sample_n=2, max_cols=40)
+    profile = _profile_df(df, sample_n=3, max_cols=25)
 
     parts = []
+    if file_name:
+        parts.append(f"File name: {file_name}")
+    if file_ext:
+        parts.append(f"File type/extension: {file_ext}")
+    if dataset_description.strip():
+        parts.append("User-provided dataset description:")
+        parts.append(dataset_description.strip())
 
-    # ✅ NEW: include pasted portal metadata/description first (keep it short)
-    if isinstance(dataset_description, str) and dataset_description.strip():
-        dd = dataset_description.strip()
-        if len(dd) > 2500:
-            dd = dd[:2500] + "..."
-        parts.append("User-provided portal metadata / description:")
-        parts.append(dd)
-        parts.append("")  # spacer
-
-    parts.append(f"The dataset has {len(cols)} columns (N={len(cols)}).")
-    parts.append("Column names: " + ", ".join([str(c) for c in cols[:40]]))
-    parts.append("Column profile (dtype, missing ratio, samples):")
+    parts.append(f"Rows={len(df)}, Columns={len(cols)} (N={len(cols)}).")
+    parts.append("Column names (first 25): " + ", ".join([str(c) for c in cols[:25]]))
+    parts.append("Column profile (dtype, missing, samples):")
     for col, info in profile.items():
         parts.append(f"- {col}: dtype={info['dtype']}, missing={info['missing']}, samples={info['samples']}")
     return "\n".join(parts)
 
+def _count_incomplete_cells(df: pd.DataFrame) -> int:
+    # Treat empty strings as missing too
+    tmp = df.copy()
+    for c in tmp.columns:
+        if tmp[c].dtype == object:
+            tmp[c] = tmp[c].astype(str).replace({"": None, "nan": None, "None": None})
+            tmp[c] = tmp[c].apply(lambda x: None if isinstance(x, str) and x.strip() == "" else x)
+    return int(tmp.isna().sum().sum())
 
-# ---------- Fix #4: Auto-first symbol derivation ----------
-def _auto_symbol(sym: str, df: pd.DataFrame, auto_inputs: Dict[str, Any]) -> Tuple[Optional[Any], str]:
+def _count_incomplete_rows(df: pd.DataFrame) -> int:
+    tmp = df.copy()
+    for c in tmp.columns:
+        if tmp[c].dtype == object:
+            tmp[c] = tmp[c].astype(str).replace({"": None, "nan": None, "None": None})
+            tmp[c] = tmp[c].apply(lambda x: None if isinstance(x, str) and x.strip() == "" else x)
+    return int(tmp.isna().any(axis=1).sum())
+
+def _count_syntactic_errors(df: pd.DataFrame) -> int:
     """
-    Returns (value or None, source_string)
-    source_string: "auto" if computed, "" if not available.
+    Simple syntactic error heuristic:
+    - For numeric-looking columns: non-empty values that fail to parse as numeric
+    - For date-looking columns: non-empty values that fail ISO YYYY-MM-DD
+    - Otherwise: 0 errors
+    """
+    errors = 0
+    for col in df.columns:
+        s = df[col]
+        non_null = s.dropna()
+        if non_null.empty:
+            continue
+
+        name = str(col).lower()
+        sample = non_null.astype(str).head(200)
+
+        looks_date = ("date" in name) or (sample.map(lambda x: bool(ISO_DATE_RE.match(x.strip()))).mean() > 0.8)
+        if looks_date:
+            bad = sample.map(lambda x: 0 if ISO_DATE_RE.match(x.strip()) else 1).sum()
+            errors += int(bad)
+            continue
+
+        # numeric-ish
+        parsed = pd.to_numeric(sample.astype(str), errors="coerce")
+        numeric_ratio = float(parsed.notna().mean())
+        if numeric_ratio > 0.85:
+            errors += int(parsed.isna().sum())
+
+    return int(errors)
+
+def _infer_standards(df: pd.DataFrame) -> Tuple[int, int]:
+    """
+    ns  = number of columns where a standard could apply
+    nsc = number of columns that actually follow the standard
+    """
+    ns = 0
+    nsc = 0
+
+    for col in df.columns:
+        name = str(col).lower()
+        s = df[col].dropna().astype(str).head(500)
+
+        if s.empty:
+            continue
+
+        # ISO date
+        if "date" in name:
+            ns += 1
+            ok = s.map(lambda x: bool(ISO_DATE_RE.match(x.strip()))).mean()
+            if ok >= 0.95:
+                nsc += 1
+            continue
+
+        # URL
+        if "url" in name or "link" in name:
+            ns += 1
+            ok = s.map(lambda x: bool(URL_RE.match(x.strip()))).mean()
+            if ok >= 0.95:
+                nsc += 1
+            continue
+
+        # codes (simple heuristic)
+        if any(k in name for k in ["ehak", "code", "id"]):
+            ns += 1
+            ok = s.map(lambda x: x.strip().isdigit()).mean()
+            if ok >= 0.95:
+                nsc += 1
+            continue
+
+    return int(ns), int(nsc)
+
+def _auto_symbol(sym: str, df: pd.DataFrame, auto_inputs: Dict[str, Any], file_ext: str) -> Tuple[Optional[Any], str]:
+    """
+    Returns (value_or_None, source) where source in {"auto",""}.
     """
     # direct auto_inputs
     if sym in auto_inputs:
@@ -122,30 +230,81 @@ def _auto_symbol(sym: str, df: pd.DataFrame, auto_inputs: Dict[str, Any]) -> Tup
 
     cols_lower = [str(c).lower() for c in df.columns]
 
-    # sd/edp/max_date already in auto_inputs; dp can be inferred from ModifiedAt if present
+    # Basic dataset derived counts
+    if sym == "nc":   # number of columns
+        return float(df.shape[1]), "auto"
+    if sym == "nr":   # number of rows
+        return float(df.shape[0]), "auto"
+    if sym == "ncl":  # number of cells
+        return float(df.shape[0] * df.shape[1]), "auto"
+
+    if sym == "ic":   # incomplete cells
+        return float(_count_incomplete_cells(df)), "auto"
+    if sym == "nir":  # incomplete rows
+        return float(_count_incomplete_rows(df)), "auto"
+    if sym == "nce":  # cells with errors
+        return float(_count_syntactic_errors(df)), "auto"
+
+    if sym == "ns" or sym == "nsc":
+        ns, nsc = _infer_standards(df)
+        if sym == "ns":
+            return float(ns), "auto"
+        return float(nsc), "auto"
+
+    # dates: cd = current date
+    if sym == "cd":
+        return dt.date.today().isoformat(), "auto"
+
+    # dp: publication/last updated date – from ModifiedAt / UpdatedAt if exists
     if sym == "dp":
-        # try ModifiedAt column as "publication/last updated"
         for c in df.columns:
             if str(c).lower() in ("modifiedat", "modified_at", "updatedat", "updated_at", "lastmodified", "last_modified"):
-                dt = pd.to_datetime(df[c], errors="coerce", utc=True)
-                if dt.notna().any():
-                    return dt.max().date().isoformat(), "auto"
-        # fallback to max_date if present
+                dtv = pd.to_datetime(df[c], errors="coerce", utc=True)
+                if dtv.notna().any():
+                    return dtv.max().date().isoformat(), "auto"
         if "max_date" in auto_inputs:
             return auto_inputs["max_date"], "auto"
 
-    # du (update dates mentioned) -> if there is a modified/updated timestamp column
+    # du (update dates mentioned) -> if timestamp column exists
     if sym == "du":
         if any(x in cols_lower for x in ["modifiedat", "modified_at", "updatedat", "updated_at", "lastmodified", "last_modified"]):
             return 1.0, "auto"
 
-    # id (identifier present) -> common if there's Id/uuid columns
+    # id (identifier present)
     if sym == "id":
         if any(x in cols_lower for x in ["id", "uuid", "identifier"]):
             return 1.0, "auto"
 
-    return None, ""
+    # 5-star heuristics from file type
+    if sym in ("s2", "s3"):
+        ext = (file_ext or "").lower().lstrip(".")
+        # structured + machine-readable (CSV, JSON, XML, XLSX are structured)
+        if sym == "s2":
+            if ext in ("csv", "json", "xml", "xlsx", "xls", "parquet"):
+                return 1.0, "auto"
+            return 0.0, "auto"
+        # non-proprietary open format
+        if sym == "s3":
+            if ext in ("csv", "json", "xml", "parquet"):
+                return 1.0, "auto"
+            return 0.0, "auto"
 
+    # s4: URIs/identifiers used (if URL columns exist)
+    if sym == "s4":
+        if any("url" in c or "link" in c for c in cols_lower):
+            return 1.0, "auto"
+        return 0.0, "auto"
+
+    # current rows count ncr (rows at max_date) if time column exists
+    if sym == "ncr":
+        date_col = auto_inputs.get("sd_col")
+        max_date = auto_inputs.get("max_date")
+        if date_col and max_date and date_col in df.columns:
+            dtv = pd.to_datetime(df[date_col], errors="coerce")
+            if dtv.notna().any():
+                return float((dtv.dt.date.astype(str) == str(max_date)).sum()), "auto"
+
+    return None, ""
 
 def compute_metrics(
     df: pd.DataFrame,
@@ -153,7 +312,9 @@ def compute_metrics(
     prompt_cfg: Dict[str, Any],
     use_llm: bool,
     hf_runner,
-    dataset_description: str = "",   # ✅ NEW
+    dataset_description: str = "",
+    file_name: str = "",
+    file_ext: str = "",
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
     vetro = (formulas_cfg or {}).get("vetro_methodology") or {}
@@ -168,9 +329,8 @@ def compute_metrics(
     env["N"] = int(df.shape[1])
     env["R"] = int(df.shape[0])
 
-    # ---------- auto inputs (sd/edp/max_date etc) ----------
+    # auto date inputs
     auto_inputs: Dict[str, Any] = {}
-
     date_col = None
     for c in df.columns:
         if "date" in str(c).lower():
@@ -178,29 +338,28 @@ def compute_metrics(
             break
 
     if date_col is not None:
-        dt = pd.to_datetime(df[date_col], errors="coerce", utc=True)
-        if dt.notna().any():
+        dtv = pd.to_datetime(df[date_col], errors="coerce", utc=True)
+        if dtv.notna().any():
             auto_inputs["sd_col"] = str(date_col)
-            auto_inputs["sd"] = dt.min().date().isoformat()
-            auto_inputs["edp"] = dt.max().date().isoformat()
-            auto_inputs["max_date"] = dt.max().date().isoformat()
+            auto_inputs["sd"] = dtv.min().date().isoformat()
+            auto_inputs["edp"] = dtv.max().date().isoformat()
+            auto_inputs["max_date"] = dtv.max().date().isoformat()
 
-    # Put auto_inputs into env
+    # inject
     for k, v in auto_inputs.items():
         env[k] = v
 
-    # ✅ NEW: build context with dataset_description
-    context = _build_llm_context(df, dataset_description=dataset_description or "")
+    context = _build_llm_context(df, dataset_description, file_name, file_ext)
 
-    # Debug collections
+    # debug collections
     llm_raw: Dict[str, str] = {}
     llm_evidence: Dict[str, str] = {}
     llm_conf: Dict[str, float] = {}
 
-    symbol_values: Dict[str, Any] = {}
-    symbol_source: Dict[str, str] = {}  # auto / llm / fail
+    symbol_values: Dict[str, Any] = {}      # None = did not work; numeric 0 = real zero
+    symbol_source: Dict[str, str] = {}      # auto / llm / fail
 
-    # ---------- required symbols from YAML ----------
+    # required symbols from YAML
     required_symbols = set()
     for dim, dim_obj in vetro.items():
         if not isinstance(dim_obj, dict):
@@ -213,51 +372,54 @@ def compute_metrics(
                     for _, sym in inp.items():
                         required_symbols.add(sym)
 
-    # ---------- fill symbols ----------
-    CONF_THRESHOLD = 0.4
+    # fill symbols
+    CONF_THRESHOLD = 0.45
 
     for sym in sorted(required_symbols):
-        # auto-first
-        auto_val, auto_src = _auto_symbol(sym, df, auto_inputs)
-        if auto_src == "auto" and auto_val is not None:
+        # 1) auto first
+        auto_val, src = _auto_symbol(sym, df, auto_inputs, file_ext)
+        if src == "auto" and auto_val is not None:
             env[sym] = auto_val
             symbol_values[sym] = auto_val
             symbol_source[sym] = "auto"
             continue
 
-        # If no auto worked, try LLM
+        # 2) LLM
         if use_llm and hf_runner is not None and sym in prompts:
-            val, raw, conf = infer_symbol(
+            val, evidence, conf, raw = infer_symbol(
                 symbol=sym,
                 context=context,
                 N=int(df.shape[1]),
                 prompt_defs=prompts,
                 hf_runner=hf_runner,
             )
-
-            raw_str = str(raw or "").strip()
-            llm_raw[sym] = raw_str
+            llm_raw[sym] = (raw or "").strip()
+            llm_evidence[sym] = (evidence or "").strip()
             llm_conf[sym] = float(conf)
 
-            em = EVIDENCE_LINE_RE.search(raw_str)
-            llm_evidence[sym] = (em.group(1).strip() if em else "")
-
-            # None means "did not work", 0.0 means "worked and answer was zero"
             if val is None or conf < CONF_THRESHOLD:
-                env[sym] = None
+                # did not work
                 symbol_values[sym] = None
                 symbol_source[sym] = "fail"
+                # but for formulas: binary/count -> safe default 0
+                typ = prompts.get(sym, {}).get("type", "binary")
+                if typ in ("binary", "count_0_to_N", "count"):
+                    env[sym] = 0.0
+                else:
+                    env[sym] = None
             else:
                 env[sym] = val
                 symbol_values[sym] = val
                 symbol_source[sym] = "llm"
+            continue
 
-        else:
-            env[sym] = None
-            symbol_values[sym] = None
-            symbol_source[sym] = "fail"
+        # 3) no LLM, fail
+        symbol_values[sym] = None
+        symbol_source[sym] = "fail"
+        # safe for formulas if numeric expected
+        env[sym] = 0.0
 
-    # ---------- compute metrics ----------
+    # compute metrics
     rows = []
     for dim, dim_obj in vetro.items():
         if not isinstance(dim_obj, dict):
@@ -286,6 +448,7 @@ def compute_metrics(
                     "metric_id": f"{dim}.{metric_key}",
                     "value": value,
                     "description": metric_obj.get("description", ""),
+                    "metric_label": metric_obj.get("label", f"{dim}: {metric_key}"),
                 }
             )
 

@@ -1,239 +1,161 @@
-import streamlit as st
+from __future__ import annotations
+
+import io
+import hashlib
+import os
 import pandas as pd
-import plotly.express as px
+import streamlit as st
 
 from core.pipeline import run_quality_assessment
 
-st.set_page_config(page_title="Open Data Quality (Vetrò + AI)", layout="wide")
-st.title("Open Data Quality Assessment (Vetrò 2016 + YAML + optional AI)")
+# ---- Paths (Streamlit Cloud repo paths) ----
+FORMULAS = "test2.yaml"
+PROMPTS  = "vetro_prompts.yaml"
 
-with st.expander("How this works", expanded=False):
-    st.markdown(
-        """
-Upload an open data file (CSV or Excel).  
-The app computes dataset-level quality metrics using a YAML-driven implementation of the Vetrò et al. (2016) framework.  
+st.set_page_config(page_title="Avaandmete kvaliteedi analüüs", layout="wide")
 
-**Important:** many Vetrò inputs relate to *metadata* (publisher, licence, description, coverage, update info).  
-A plain CSV often does not include that, so those parts may be **unknown** unless you paste portal metadata in the description box.
-"""
-    )
+def _hash_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()[:16]
 
-# Pretty labels for chart/table (you can expand this later)
-PRETTY_METRIC_NAMES = {
-    "traceability.track_of_creation": "Traceability: track of creation",
-    "traceability.track_of_updates": "Traceability: track of updates",
-    "currentness.percentage_of_current_rows": "Currentness: % current rows",
-    "currentness.delay_in_publication": "Currentness: delay in publication",
-    "currentness.delay_after_expiration": "Currentness: delay after expiration",
-    "completeness.percentage_of_complete_cells": "Completeness: % complete cells",
-    "completeness.percentage_of_complete_rows": "Completeness: % complete rows",
-    "compliance.percentage_of_standardized_columns": "Compliance: % standardized columns",
-    "compliance.egms_compliance": "Compliance: eGMS compliance",
-    "compliance.five_stars_open_data": "Compliance: 5-star open data",
-    "understandability.percentage_of_columns_with_metadata": "Understandability: % columns with metadata",
-    "understandability.percentage_of_columns_in_comprehensible_format": "Understandability: % columns comprehensible",
-    "accuracy.percentage_of_syntactically_accurate_cells": "Accuracy: % syntactically accurate cells",
-    "accuracy.accuracy_in_aggregation": "Accuracy: aggregation accuracy",
-}
+def load_dataset(uploaded_file, max_rows: int) -> tuple[pd.DataFrame, str, str]:
+    """
+    Returns df, file_name, file_ext
+    max_rows=0 => load all
+    """
+    file_name = uploaded_file.name
+    ext = os.path.splitext(file_name)[1].lower().lstrip(".")
+    data = uploaded_file.getvalue()
 
-FORMULAS = "configs/formulas.yaml"
-PROMPTS = "configs/prompts.yaml"
+    if ext in ("csv", "txt"):
+        # try a few encodings
+        for enc in ("utf-8", "utf-8-sig", "cp1252", "latin1"):
+            try:
+                df = pd.read_csv(
+                    io.BytesIO(data),
+                    encoding=enc,
+                    low_memory=False,
+                )
+                break
+            except Exception:
+                df = None
+        if df is None:
+            raise ValueError("CSV lugemine ebaõnnestus (encoding). Proovi salvestada UTF-8 kujul.")
+    elif ext in ("xlsx", "xls"):
+        df = pd.read_excel(io.BytesIO(data))
+    elif ext in ("json",):
+        df = pd.read_json(io.BytesIO(data))
+    else:
+        raise ValueError(f"Failitüüp .{ext} pole praegu toetatud. Proovi CSV/XLSX/JSON.")
 
-# -------- UI --------
-col1, col2, col3 = st.columns([2, 1, 1])
+    if max_rows and max_rows > 0:
+        df = df.head(max_rows).copy()
 
-with col1:
-    uploaded = st.file_uploader("Upload dataset (CSV / XLSX)", type=["csv", "xlsx", "xls"])
-    description = st.text_area(
-        "Optional: paste portal metadata / description (helps LLM estimate metadata-related symbols)",
-        height=120,
-        placeholder="Paste dataset description, publisher, licence, update info here (optional).",
-    )
+    return df, file_name, ext
 
-with col2:
-    use_llm = st.toggle("Use Hugging Face LLM", value=False)
+def nice_bar_chart_df(metrics_df: pd.DataFrame) -> pd.DataFrame:
+    out = metrics_df.copy()
+    out["value"] = pd.to_numeric(out["value"], errors="coerce")
+    out = out.dropna(subset=["value"])
+    out = out.sort_values(["dimension", "metric"])
+    out["label"] = out["metric_label"].fillna(out["metric_id"])
+    return out[["label", "value", "dimension", "metric_id"]]
+
+st.title("Avaandmete kvaliteedi analüüs (Vetrò + AI)")
+
+with st.sidebar:
+    st.header("Sisend")
+
+    uploaded = st.file_uploader("Laadi üles andmestik (CSV / XLSX / JSON)", type=["csv","txt","xlsx","xls","json"])
+
+    max_rows = st.number_input("Max read (0 = kõik read)", min_value=0, value=0, step=1000)
+
+    st.divider()
+    st.header("AI (valikuline)")
+
+    use_llm = st.toggle("Kasuta Hugging Face mudelit", value=True)
 
     model_choices = [
         "google/flan-t5-small",
         "google/flan-t5-base",
-        "google/flan-t5-large",
     ]
-    hf_model = st.selectbox("HF model", options=model_choices, index=1, disabled=not use_llm)
-    custom_model = st.text_input("Or custom model name", value="", disabled=not use_llm)
-    hf_model_name = custom_model.strip() if (use_llm and custom_model.strip()) else hf_model
+    hf_model = st.selectbox("Mudeli valik", options=model_choices, index=1)
+    custom_model = st.text_input("…või kirjuta oma HF mudel (optional)", value="")
+    if custom_model.strip():
+        hf_model = custom_model.strip()
 
-with col3:
-    max_rows = st.number_input(
-        "Max rows to process (0 = all)",
-        min_value=0,
-        value=0,
-        step=10000,
-        help="0 = use the full dataset (no hard limit).",
-    )
-    run_btn = st.button("Run assessment", type="primary", width="stretch")
+    st.divider()
+    st.header("Lisainfo (parandab AI vastuseid)")
 
-# -------- Helpers --------
-def read_uploaded(file) -> pd.DataFrame:
-    name = file.name.lower()
-
-    if name.endswith(".csv"):
-        # Try common encodings
-        for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
-            try:
-                return pd.read_csv(file, encoding=enc)
-            except UnicodeDecodeError:
-                file.seek(0)
-                continue
-        file.seek(0)
-        return pd.read_csv(file, encoding_errors="replace")
-
-    # Excel
-    return pd.read_excel(file)
-
-def build_symbol_debug_table(details: dict) -> pd.DataFrame:
-    # support both "new" and "old" detail shapes
-    input_symbols = details.get("input_symbols", [])
-
-    auto_inputs = (
-        details.get("auto_inputs")
-        or details.get("debug", {}).get("auto", {})
-        or {}
+    dataset_description = st.text_area(
+        "Lühikirjeldus (1–5 lauset). Nt kust andmed pärinevad, mida veerud tähendavad, mis ajaperiood jne.",
+        value="",
+        height=120,
     )
 
-    llm_raw = (
-        details.get("llm_raw")
-        or details.get("debug", {}).get("llm_raw", {})
-        or {}
-    )
+run_btn = st.button("Analüüsi", type="primary", use_container_width=True)
 
-    llm_conf = (
-        details.get("llm_confidence")
-        or details.get("debug", {}).get("llm_confidence", {})
-        or {}
-    )
-
-    llm_evidence = (
-        details.get("llm_evidence")
-        or details.get("debug", {}).get("llm_evidence", {})
-        or {}
-    )
-
-    symbol_values = details.get("symbol_values") or {}
-    symbol_source = details.get("symbol_source") or {}
-
-    # If symbol_values absent but env exists, recover values from env
-    env = details.get("env") or {}
-    if not symbol_values and env and input_symbols:
-        symbol_values = {s: env.get(s) for s in input_symbols}
-
-    # If still no input_symbols, infer from union of seen keys
-    if not input_symbols:
-        input_symbols = sorted(
-            set(symbol_values.keys()) | set(llm_raw.keys()) | set(auto_inputs.keys())
-        )
-
-    rows = []
-    for s in input_symbols:
-        v = symbol_values.get(s, None)
-
-        src = symbol_source.get(s, "")
-        if not src:
-            if s in auto_inputs:
-                src = "auto"
-            elif s in llm_raw:
-                src = "llm"
-            else:
-                src = "fail"
-
-        rows.append(
-            {
-                "symbol": s,
-                "value": v,  # None = did not work, 0.0 = real zero
-                "source": src,
-                "confidence": llm_conf.get(s, None),
-                "evidence": llm_evidence.get(s, ""),
-                "raw": llm_raw.get(s, ""),
-            }
-        )
-
-    return pd.DataFrame(rows)
-
-# -------- Main flow --------
 if uploaded is None:
-    st.info("Upload a dataset file to start.")
+    st.info("Lae üles fail ja vajuta **Analüüsi**.")
     st.stop()
 
-df = read_uploaded(uploaded)
+# Session cache key
+file_bytes = uploaded.getvalue()
+cache_key = _hash_bytes(file_bytes) + f":{max_rows}:{use_llm}:{hf_model}:{hash(dataset_description)}"
 
-# max_rows = 0 => all rows
-if max_rows and int(max_rows) > 0:
-    df = df.head(int(max_rows)).copy()
+if "results" not in st.session_state:
+    st.session_state["results"] = {}
 
-st.subheader("Preview")
-st.write(f"Rows: {len(df):,} | Columns: {len(df.columns)}")
-st.dataframe(df.head(50), width="stretch")
-
-if not run_btn:
-    st.stop()
-
-with st.spinner("Computing metrics..."):
-    try:
+if run_btn:
+    with st.spinner("Loen faili ja arvutan metrikad..."):
+        df, file_name, ext = load_dataset(uploaded, int(max_rows))
         _, metrics_df, details = run_quality_assessment(
             df=df,
             formulas_yaml_path=FORMULAS,
             prompts_yaml_path=PROMPTS,
-            dataset_description=description or "",
             use_llm=use_llm,
-            hf_model_name=hf_model_name,
+            hf_model_name=hf_model,
+            dataset_description=dataset_description,
+            file_name=file_name,
+            file_ext=ext,
         )
-    except Exception as e:
-        st.error("Run failed. See error below.")
-        st.exception(e)
-        st.stop()
+        st.session_state["results"][cache_key] = (df, metrics_df, details)
 
-# Add metric_id + pretty label
-metrics_df = metrics_df.copy()
-metrics_df["metric_id"] = metrics_df["dimension"] + "." + metrics_df["metric"]
-metrics_df["metric_label"] = metrics_df["metric_id"].map(PRETTY_METRIC_NAMES).fillna(metrics_df["metric_id"])
+if cache_key not in st.session_state["results"]:
+    st.warning("Vajuta **Analüüsi**, et näha tulemusi.")
+    st.stop()
 
-st.subheader("Metric results")
-st.dataframe(metrics_df[["dimension", "metric", "value", "metric_label"]], width="stretch")
+df, metrics_df, details = st.session_state["results"][cache_key]
 
-st.subheader("Bar chart (metric scores)")
-plot_df = metrics_df.dropna(subset=["value"]).copy()
-plot_df = plot_df.sort_values("value", ascending=True)
+st.subheader("Eelvaade")
+st.dataframe(df.head(20), width="stretch")
 
-fig = px.bar(
-    plot_df,
-    x="value",
-    y="metric_label",
-    orientation="h",
-)
-fig.update_layout(xaxis_title="Score (normalized)", yaxis_title="Metric")
-st.plotly_chart(fig, width="stretch")
+st.subheader("Metrikad")
+st.dataframe(metrics_df[["dimension","metric","metric_id","value","metric_label"]], width="stretch")
 
-st.subheader("Download")
-st.download_button(
-    "Download metric table (CSV)",
-    data=metrics_df.to_csv(index=False).encode("utf-8"),
-    file_name="quality_metrics.csv",
-    mime="text/csv",
-)
+chart_df = nice_bar_chart_df(metrics_df)
+if not chart_df.empty:
+    st.subheader("Tulpdiagramm")
+    st.bar_chart(chart_df.set_index("label")["value"], height=380)
 
-with st.expander("Debug info (inputs used)", expanded=False):
-    # Show auto inputs plainly
-    auto_inputs = details.get("auto_inputs") or details.get("debug", {}).get("auto", {}) or {}
-    st.markdown("**Auto inputs (derived from data):**")
-    st.json(auto_inputs)
+with st.expander("Debug (auto_inputs, symbolid, LLM raw)"):
+    st.write("Auto inputs (derived from data):")
+    st.json(details.get("auto_inputs", {}))
 
-    # Show per-symbol table (value None = did not work; 0.0 = real 0)
-    sym_df = build_symbol_debug_table(details)
-    st.markdown("**Per-symbol results (None = did not work; 0.0 = real zero):**")
-    st.dataframe(sym_df, width="stretch")
+    # nicer symbol table
+    sym_vals = details.get("symbol_values", {}) or {}
+    sym_src = details.get("symbol_source", {}) or {}
+    sym_conf = details.get("llm_confidence", {}) or {}
+    sym_ev = details.get("llm_evidence", {}) or {}
+    sym_raw = details.get("llm_raw", {}) or {}
 
-    st.download_button(
-        "Download debug table (CSV)",
-        data=sym_df.to_csv(index=False).encode("utf-8"),
-        file_name="symbol_debug.csv",
-        mime="text/csv",
-    )
+    rows = []
+    for k in sorted(set(sym_vals.keys()) | set(sym_src.keys())):
+        rows.append({
+            "symbol": k,
+            "value": sym_vals.get(k, None),
+            "source": sym_src.get(k, ""),
+            "confidence": sym_conf.get(k, None),
+            "evidence": sym_ev.get(k, ""),
+            "raw": sym_raw.get(k, ""),
+        })
+    st.dataframe(pd.DataFrame(rows), width="stretch")

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Optional
 import yaml
 import pandas as pd
 
 from core.llm import get_hf_runner
 from core.metrics_eval import compute_metrics
-
 
 def run_quality_assessment(
     df: pd.DataFrame,
@@ -15,6 +14,8 @@ def run_quality_assessment(
     use_llm: bool,
     hf_model_name: str,
     dataset_description: str = "",
+    file_name: str = "",
+    file_ext: str = "",
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
 
     with open(formulas_yaml_path, "r", encoding="utf-8") as f:
@@ -34,6 +35,8 @@ def run_quality_assessment(
         use_llm=use_llm,
         hf_runner=hf_runner,
         dataset_description=dataset_description or "",
+        file_name=file_name or "",
+        file_ext=file_ext or "",
     )
 
     return df, metrics_df, details
