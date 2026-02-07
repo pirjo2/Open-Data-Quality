@@ -10,6 +10,7 @@ from core.llm import infer_symbol
 COND_ALLOWED_RE = re.compile(r"^[0-9a-zA-Z_ .<>=!()+\-*/]+$")
 EVIDENCE_LINE_RE = re.compile(r"(?im)^\s*evidence\s*[:=]\s*(.*)\s*$")
 
+
 def _safe_eval_condition(expr: str, env: Dict[str, float]) -> bool:
     if not isinstance(expr, str) or not COND_ALLOWED_RE.match(expr):
         return False
@@ -17,6 +18,7 @@ def _safe_eval_condition(expr: str, env: Dict[str, float]) -> bool:
         return bool(eval(expr, {"__builtins__": {}}, env))
     except Exception:
         return False
+
 
 def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
     if node is None:
@@ -72,6 +74,7 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
 
     return float("nan")
 
+
 def _profile_df(df: pd.DataFrame, sample_n: int = 2, max_cols: int = 40) -> Dict[str, Any]:
     profile: Dict[str, Any] = {}
     cols = list(df.columns)[:max_cols]
@@ -83,17 +86,29 @@ def _profile_df(df: pd.DataFrame, sample_n: int = 2, max_cols: int = 40) -> Dict
         profile[str(col)] = {"dtype": dtype, "missing": round(missing, 6), "samples": samples}
     return profile
 
-def _build_llm_context(df: pd.DataFrame) -> str:
+
+def _build_llm_context(df: pd.DataFrame, dataset_description: str = "") -> str:
     cols = list(df.columns)
     profile = _profile_df(df, sample_n=2, max_cols=40)
 
     parts = []
+
+    # ✅ NEW: include pasted portal metadata/description first (keep it short)
+    if isinstance(dataset_description, str) and dataset_description.strip():
+        dd = dataset_description.strip()
+        if len(dd) > 2500:
+            dd = dd[:2500] + "..."
+        parts.append("User-provided portal metadata / description:")
+        parts.append(dd)
+        parts.append("")  # spacer
+
     parts.append(f"The dataset has {len(cols)} columns (N={len(cols)}).")
     parts.append("Column names: " + ", ".join([str(c) for c in cols[:40]]))
     parts.append("Column profile (dtype, missing ratio, samples):")
     for col, info in profile.items():
         parts.append(f"- {col}: dtype={info['dtype']}, missing={info['missing']}, samples={info['samples']}")
     return "\n".join(parts)
+
 
 # ---------- Fix #4: Auto-first symbol derivation ----------
 def _auto_symbol(sym: str, df: pd.DataFrame, auto_inputs: Dict[str, Any]) -> Tuple[Optional[Any], str]:
@@ -115,7 +130,7 @@ def _auto_symbol(sym: str, df: pd.DataFrame, auto_inputs: Dict[str, Any]) -> Tup
                 dt = pd.to_datetime(df[c], errors="coerce", utc=True)
                 if dt.notna().any():
                     return dt.max().date().isoformat(), "auto"
-        # if we have max_date we can use it as a fallback (still auto)
+        # fallback to max_date if present
         if "max_date" in auto_inputs:
             return auto_inputs["max_date"], "auto"
 
@@ -131,12 +146,14 @@ def _auto_symbol(sym: str, df: pd.DataFrame, auto_inputs: Dict[str, Any]) -> Tup
 
     return None, ""
 
+
 def compute_metrics(
     df: pd.DataFrame,
     formulas_cfg: Dict[str, Any],
     prompt_cfg: Dict[str, Any],
     use_llm: bool,
     hf_runner,
+    dataset_description: str = "",   # ✅ NEW
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
     vetro = (formulas_cfg or {}).get("vetro_methodology") or {}
@@ -172,7 +189,8 @@ def compute_metrics(
     for k, v in auto_inputs.items():
         env[k] = v
 
-    context = _build_llm_context(df)
+    # ✅ NEW: build context with dataset_description
+    context = _build_llm_context(df, dataset_description=dataset_description or "")
 
     # Debug collections
     llm_raw: Dict[str, str] = {}
@@ -199,7 +217,7 @@ def compute_metrics(
     CONF_THRESHOLD = 0.4
 
     for sym in sorted(required_symbols):
-        # Fix #4: auto-first
+        # auto-first
         auto_val, auto_src = _auto_symbol(sym, df, auto_inputs)
         if auto_src == "auto" and auto_val is not None:
             env[sym] = auto_val
@@ -224,19 +242,17 @@ def compute_metrics(
             em = EVIDENCE_LINE_RE.search(raw_str)
             llm_evidence[sym] = (em.group(1).strip() if em else "")
 
-            # Fix: "null if not worked" + confidence gating to None
+            # None means "did not work", 0.0 means "worked and answer was zero"
             if val is None or conf < CONF_THRESHOLD:
                 env[sym] = None
                 symbol_values[sym] = None
                 symbol_source[sym] = "fail"
             else:
-                # Keep numeric (can be 0.0 or 0.14 etc)
                 env[sym] = val
                 symbol_values[sym] = val
                 symbol_source[sym] = "llm"
 
         else:
-            # no llm available => not worked
             env[sym] = None
             symbol_values[sym] = None
             symbol_source[sym] = "fail"
