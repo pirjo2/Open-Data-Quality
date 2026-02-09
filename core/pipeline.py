@@ -4,9 +4,9 @@ from typing import Any, Dict, Tuple
 
 import pandas as pd
 
-from core.yaml_loader import load_yaml
 from core.llm import get_hf_runner
 from core.metrics_eval import compute_metrics
+from core.yaml_loader import load_yaml
 
 
 def run_quality_assessment(
@@ -18,11 +18,9 @@ def run_quality_assessment(
     dataset_description: str = "",
     file_name: str = "",
     file_ext: str = "",
+    weight_by_confidence: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
-    """
-    Main entry point for the Streamlit app.
-    Returns: (df, metrics_df, details)
-    """
+
     formulas_cfg = load_yaml(formulas_yaml_path)
     prompt_cfg = load_yaml(prompts_yaml_path)
 
@@ -39,6 +37,7 @@ def run_quality_assessment(
         dataset_description=dataset_description or "",
         file_name=file_name or "",
         file_ext=file_ext or "",
+        weight_by_confidence=weight_by_confidence,
     )
 
     return df, metrics_df, details

@@ -1,146 +1,342 @@
 meta:
-  name: Vetrò symbol prompting pack
-  version: '1.0'
+  name: Vetrò symbol prompting pack (heuristic)
+  version: "2.0"
   notes:
-  - Prompts are used only for symbols that cannot be reliably derived from the data
-    file.
-  - 'Notebook will format prompts with placeholders: {dataset_description}, {columns},
-    {profile}, {N}.'
-  - 'Expected outputs: binary -> 0/1, count -> integer, date -> YYYY-MM-DD (not a
-    datetime).'
+    - Heuristic mode: if explicit metadata is missing, infer from column names, sample values and common open-data patterns.
+    - Output format is strict for parsing: answer 0/1 (or integer/date), plus confidence 0..1.
+    - Placeholders (optional): {dataset_description}, {columns}, {profile}, {N}.
+    - Expected outputs:
+      - binary -> answer: 0/1
+      - count_0_to_N -> answer: integer 0..N
+      - date -> answer: YYYY-MM-DD or UNKNOWN
+
 symbols:
   s:
     type: binary
-    prompt: "Task: Open data metadata check (Vetrò-style).\nQuestion: Is the DATA\
-      \ SOURCE explicitly stated (publisher organisation/system or source system)?\n\
-      Use only the provided context below.\nOutput format:\n  answer: 1 or 0\n  evidence:\
-      \ short quote or phrase from the context (or 'none')\n"
+    prompt: |
+      Task: Open data metadata check (Vetrò-style, heuristic).
+      Question: Is the DATA SOURCE stated or reasonably inferable?
+      Explicit source examples: publisher organisation/system name, source system, data owner.
+      Heuristic inference allowed if columns/values clearly imply a source (e.g., official codes, "RIA", "Statistics Estonia", ministry names).
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: number from 0.0 to 1.0
+      evidence: short quote/phrase OR "inferred from <reason>" OR "none"
+      Rules: Do NOT answer Yes/No. No extra text.
+
   dc:
     type: binary
-    prompt: "Task: Open data metadata check (Vetrò-style).\nQuestion: Is a DATE OF\
-      \ CREATION / ISSUED DATE explicitly present in the metadata/description?\n(This\
-      \ is a presence/absence check, not the date value itself.)\nOutput format:\n\
-      \  answer: 1 or 0\n  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: Metadata check (heuristic).
+      Question: Is a CREATION/ISSUED DATE present or strongly implied?
+      Explicit: "created/issued" date in metadata.
+      Heuristic: presence of a clear creation timestamp column (CreatedAt/IssuedAt) or similar.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-column OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   lu:
     type: binary
-    prompt: "Task: Open data metadata check (Vetrò-style).\nQuestion: Is a LIST/LOG\
-      \ of updates or version history mentioned (e.g., changelog, versions list)?\n\
-      Output format:\n  answer: 1 or 0\n  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: Metadata check (heuristic).
+      Question: Is an update log / version history present or inferable?
+      Explicit: changelog, versions list, release notes.
+      Heuristic: presence of columns like Version, Revision, ChangeLog, or multiple dated versions.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-column OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   du:
     type: binary
-    prompt: "Task: Open data metadata check (Vetrò-style).\nQuestion: Are update DATES\
-      \ mentioned (e.g., 'last updated 2025-10-25', dated versions, update timestamps)?\n\
-      Output format:\n  answer: 1 or 0\n  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: Metadata check (heuristic).
+      Question: Are update DATES mentioned or inferable?
+      Explicit: "last updated", dated versions, update timestamps.
+      Heuristic: presence of columns like ModifiedAt/UpdatedAt/LastModified with timestamps.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-column OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   dp:
     type: date
-    prompt: "Task: Metadata extraction.\nQuestion: What is the dataset PUBLICATION\
-      \ DATE or LAST UPDATED date?\nReturn a single date in YYYY-MM-DD.\nIf multiple\
-      \ dates exist, pick the most recent 'published/updated/modified' date.\nOutput\
-      \ format:\n  answer: YYYY-MM-DD or UNKNOWN\n  evidence: short quote or phrase\
-      \ (or 'none')\n"
+    prompt: |
+      Task: Date extraction (heuristic).
+      Question: What is the dataset PUBLICATION date or LAST UPDATED date?
+      Prefer explicit metadata. If missing, infer from ModifiedAt/UpdatedAt columns (use most recent date).
+      Return ONE date in YYYY-MM-DD.
+      If no reasonable date exists, return UNKNOWN.
+
+      Return EXACTLY 2 lines:
+      answer: YYYY-MM-DD or UNKNOWN
+      evidence: quote OR inferred-from-column OR none
+      Rules: Do NOT output the literal placeholder "YYYY-MM-DD".
+
   sd:
     type: date
-    prompt: "Task: Metadata extraction.\nQuestion: What is the START date of the period\
-      \ of time referred by the dataset?\nReturn a single date in YYYY-MM-DD.\nOutput\
-      \ format:\n  answer: YYYY-MM-DD or UNKNOWN\n  evidence: short quote or phrase\
-      \ (or 'none')\n"
+    prompt: |
+      Task: Date extraction (heuristic).
+      Question: What is the START date of the time period referred by the dataset?
+      Prefer explicit metadata. If missing, infer from the earliest date-like column (min date).
+      Return ONE date in YYYY-MM-DD or UNKNOWN.
+
+      Return EXACTLY 2 lines:
+      answer: YYYY-MM-DD or UNKNOWN
+      evidence: quote OR inferred-from-column OR none
+      Rules: Do NOT output the literal placeholder "YYYY-MM-DD".
+
   edp:
     type: date
-    prompt: "Task: Metadata extraction.\nQuestion: What is the END date of the period\
-      \ of time referred by the dataset?\nReturn a single date in YYYY-MM-DD.\nOutput\
-      \ format:\n  answer: YYYY-MM-DD or UNKNOWN\n  evidence: short quote or phrase\
-      \ (or 'none')\n"
+    prompt: |
+      Task: Date extraction (heuristic).
+      Question: What is the END date of the time period referred by the dataset?
+      Prefer explicit metadata. If missing, infer from the latest date-like column (max date).
+      Return ONE date in YYYY-MM-DD or UNKNOWN.
+
+      Return EXACTLY 2 lines:
+      answer: YYYY-MM-DD or UNKNOWN
+      evidence: quote OR inferred-from-column OR none
+      Rules: Do NOT output the literal placeholder "YYYY-MM-DD".
+
   ed:
     type: date
-    prompt: "Task: Metadata extraction.\nQuestion: What is the EXPIRATION date of\
-      \ the previous dataset version (or the date when the previous version became\
-      \ outdated)?\nReturn a single date in YYYY-MM-DD.\nOutput format:\n  answer:\
-      \ YYYY-MM-DD or UNKNOWN\n  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: Date extraction (heuristic).
+      Question: What is the EXPIRATION date of the previous dataset version?
+      If not explicit, you may infer expiration as the end date of the previous period (if clearly implied).
+      Return ONE date in YYYY-MM-DD or UNKNOWN.
+
+      Return EXACTLY 2 lines:
+      answer: YYYY-MM-DD or UNKNOWN
+      evidence: quote OR inferred-from-reason OR none
+      Rules: Do NOT output the literal placeholder "YYYY-MM-DD".
+
   c:
     type: binary
-    prompt: "Task: eGMS / Dublin Core field presence (Vetrò-style).\nField: Category\
-      \ / Subject / Theme.\nQuestion: Is CATEGORY (theme/subject) present in metadata?\n\
-      Output format:\n  answer: 1 or 0\n  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: eGMS/Dublin Core presence (heuristic).
+      Field: Category/Subject/Theme.
+      Question: Is a category/theme present OR inferable from dataset description/column names?
+      Heuristic: obvious topic columns like "Vaccination", "Budget", "Transport", etc.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-topic OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   t:
     type: binary
-    prompt: "Task: eGMS / Dublin Core field presence (Vetrò-style).\nField: Title.\n\
-      Question: Is TITLE present in metadata?\nOutput format:\n  answer: 1 or 0\n\
-      \  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: eGMS/Dublin Core presence (heuristic).
+      Field: Title.
+      Question: Is a title present OR inferable as a clear dataset name/topic in the context?
+      Heuristic: if context describes the dataset purpose clearly, treat as inferred title.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-description OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   d:
     type: binary
-    prompt: "Task: eGMS / Dublin Core field presence (Vetrò-style).\nField: Description.\n\
-      Question: Is DESCRIPTION present in metadata (a human-readable dataset description)?\n\
-      Output format:\n  answer: 1 or 0\n  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: eGMS/Dublin Core presence (heuristic).
+      Field: Description.
+      Question: Is a human-readable DESCRIPTION present OR inferable (context explains what data represents)?
+      Heuristic: if column names + profile clearly describe the dataset, treat as inferred.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-columns OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   id:
     type: binary
-    prompt: "Task: eGMS / Dublin Core field presence (Vetrò-style).\nField: Identifier.\n\
-      Question: Is an IDENTIFIER present (dataset id/uuid/uri/permalink in metadata)?\n\
-      Output format:\n  answer: 1 or 0\n  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: eGMS/Dublin Core presence (heuristic).
+      Field: Identifier.
+      Question: Is an identifier present or inferable?
+      Heuristic: presence of columns like Id/UUID/Identifier/Permalink.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-column OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   pb:
     type: binary
-    prompt: "Task: eGMS / Dublin Core field presence (Vetrò-style).\nField: Publisher.\n\
-      Question: Is PUBLISHER present (publishing organisation) in metadata?\nOutput\
-      \ format:\n  answer: 1 or 0\n  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: eGMS/Dublin Core presence (heuristic).
+      Field: Publisher.
+      Question: Is publisher present OR inferable?
+      Heuristic: organisation-like values/columns (e.g., Ministry, Agency, RIA, Statistics Estonia) OR known official codes strongly tied to a publisher.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-organisation OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   cv:
     type: binary
-    prompt: "Task: eGMS / Dublin Core field presence (Vetrò-style).\nField: Coverage.\n\
-      Question: Is COVERAGE present (geographic and/or temporal coverage stated in\
-      \ metadata)?\nOutput format:\n  answer: 1 or 0\n  evidence: short quote or phrase\
-      \ (or 'none')\n"
+    prompt: |
+      Task: eGMS/Dublin Core presence (heuristic).
+      Field: Coverage (geo/temporal).
+      Question: Is coverage present OR inferable?
+      Heuristic: geo columns (county/municipality/EHAK/country) imply geographic coverage; date columns imply temporal coverage.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-columns OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   l:
     type: binary
-    prompt: "Task: eGMS / Dublin Core field presence (Vetrò-style).\nField: Language.\n\
-      Question: Is LANGUAGE present in metadata?\nOutput format:\n  answer: 1 or 0\n\
-      \  evidence: short quote or phrase (or 'none')\n"
+    prompt: |
+      Task: eGMS/Dublin Core presence (heuristic).
+      Field: Language.
+      Question: Is language present OR inferable?
+      Heuristic: if all text values appear in a single language (e.g., Estonian place names), infer language with lower confidence.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-values OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   s1:
     type: binary
-    prompt: "Task: 5-star open data check.\nCriterion (1-star): Data is on the web\
-      \ under an open license.\nOutput format:\n  answer: 1 or 0\n  evidence: short\
-      \ phrase (or 'none')\n"
+    prompt: |
+      Task: 5-star open data check (heuristic).
+      Criterion (1-star): Open license.
+      Explicit: license field/name (CC BY, CC0, etc).
+      Heuristic: if context strongly suggests official open data portal practice but no license mentioned -> allow inference with low confidence.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-portal-context OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   s2:
     type: binary
-    prompt: "Task: 5-star open data check.\nCriterion (2-star): Data is structured\
-      \ and machine-readable.\nOutput format:\n  answer: 1 or 0\n  evidence: short\
-      \ phrase (or 'none')\n"
+    prompt: |
+      Task: 5-star open data check (heuristic).
+      Criterion (2-star): Structured & machine-readable.
+      Explicit: machine-readable structured dataset.
+      Heuristic: tabular columns + consistent types implies structured data.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-tabular-structure OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   s3:
     type: binary
-    prompt: "Task: 5-star open data check.\nCriterion (3-star): Data is in a non-proprietary\
-      \ open format (CSV/JSON/XML).\nOutput format:\n  answer: 1 or 0\n  evidence:\
-      \ short phrase (or 'none')\n"
+    prompt: |
+      Task: 5-star open data check (heuristic).
+      Criterion (3-star): Non-proprietary open format (CSV/JSON/XML).
+      Explicit: CSV/JSON/XML mentioned.
+      Heuristic: if context clearly indicates CSV-like structure and column names, infer with medium confidence.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-format OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   s4:
     type: binary
-    prompt: "Task: 5-star open data check.\nCriterion (4-star): Uses URIs/identifiers\
-      \ so things can be referenced.\nOutput format:\n  answer: 1 or 0\n  evidence:\
-      \ short phrase (or 'none')\n"
+    prompt: |
+      Task: 5-star open data check (heuristic).
+      Criterion (4-star): Uses URIs/identifiers.
+      Explicit: URIs/permalinks/identifiers mentioned.
+      Heuristic: presence of stable identifier columns (UUID, URI-like strings) -> infer with lower confidence.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-identifier-pattern OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   s5:
     type: binary
-    prompt: "Task: 5-star open data check.\nCriterion (5-star): Links to other datasets\
-      \ (Linked Open Data).\nOutput format:\n  answer: 1 or 0\n  evidence: short phrase\
-      \ (or 'none')\n"
+    prompt: |
+      Task: 5-star open data check (heuristic).
+      Criterion (5-star): Links to other datasets (Linked Open Data).
+      Explicit: RDF links, external dataset links, linked open data references.
+      Heuristic: if clear URI linking patterns exist, infer with low confidence.
+      IMPORTANT: Do NOT output "5". Output answer only as 1 or 0.
+
+      Return EXACTLY 3 lines:
+      answer: 1 or 0
+      confidence: 0.0 to 1.0
+      evidence: quote OR inferred-from-linking OR none
+      Rules: Do NOT answer Yes/No. No extra text.
+
   ncm:
     type: count_0_to_N
-    prompt: "Task: Column documentation coverage (Vetrò-style).\nQuestion: How many\
-      \ columns have explicit per-column metadata/definitions (e.g., data dictionary,\
-      \ portal explains each field)?\nUse the provided context: description + columns\
-      \ + profile.\nOutput format:\n  answer: integer from 0 to N\n  evidence: short\
-      \ justification (or 'none')\n"
+    prompt: |
+      Task: Column documentation coverage (heuristic).
+      Question: How many columns have explicit per-column metadata/definitions?
+      Heuristic: if column names are self-explanatory, you may count them as partially documented with lower confidence.
+
+      Return EXACTLY 3 lines:
+      answer: integer from 0 to N
+      confidence: 0.0 to 1.0
+      evidence: short reason (or none)
+      Rules: answer must be an integer only. Do NOT output code.
+
   ncuf:
     type: count_0_to_N
-    prompt: "Task: Column comprehensible format count (Vetrò-style).\nQuestion: How\
-      \ many columns are in a comprehensible user-friendly format (clear meaning,\
-      \ readable values/units; not cryptic codes only)?\nOutput format:\n  answer:\
-      \ integer from 0 to N\n  evidence: short justification (or 'none')\n"
+    prompt: |
+      Task: Column comprehensible format count (heuristic).
+      Question: How many columns are in a comprehensible user-friendly format?
+      Heuristic: clear names + readable values (not only cryptic codes) count as comprehensible.
+
+      Return EXACTLY 3 lines:
+      answer: integer from 0 to N
+      confidence: 0.0 to 1.0
+      evidence: short reason (or none)
+      Rules: answer must be an integer only. Do NOT output code.
+
   ns:
     type: count_0_to_N
-    prompt: "Task: Standards applicability count (Vetrò-style).\nDefinition: ns =\
-      \ number of columns with associated standards (where a recognized standard could\
-      \ apply: ISO dates, ISO country codes, official region codes, classifications).\n\
-      Question: Estimate ns from the context.\nOutput format:\n  answer: integer from\
-      \ 0 to N\n  evidence: list a few example columns (or 'none')\n"
+    prompt: |
+      Task: Standards applicability count (heuristic).
+      Definition: ns = number of columns where a recognized standard could apply (ISO dates, ISO country codes, EHAK-like region codes, classifications).
+      Heuristic: if a column looks like a code system (EHAK, ISO), count it as applicable.
+
+      Return EXACTLY 3 lines:
+      answer: integer from 0 to N
+      confidence: 0.0 to 1.0
+      evidence: list 1-3 example columns (or none)
+      Rules: answer must be an integer only. Do NOT output code.
+
   nsc:
     type: count_0_to_N
-    prompt: "Task: Standardized columns count (Vetrò-style).\nDefinition: nsc = number\
-      \ of columns that actually follow the associated standard consistently.\nQuestion:\
-      \ Estimate nsc from the context (consider column values in the profile if available).\n\
-      Output format:\n  answer: integer from 0 to N\n  evidence: list a few example\
-      \ columns (or 'none')\n"
+    prompt: |
+      Task: Standardized columns count (heuristic).
+      Definition: nsc = number of columns that actually follow the associated standard consistently.
+      Heuristic: if sample values match the expected standard pattern (e.g., date format, numeric codes), count as standardized.
+
+      Return EXACTLY 3 lines:
+      answer: integer from 0 to N
+      confidence: 0.0 to 1.0
+      evidence: list 1-3 example columns (or none)
+      Rules: answer must be an integer only. Do NOT output code.

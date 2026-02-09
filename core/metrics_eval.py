@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple, Optional, List
+import datetime as dt
 import math
 import re
 
@@ -8,13 +9,11 @@ import pandas as pd
 
 from core.llm import infer_symbol
 
-
 COND_ALLOWED_RE = re.compile(r"^[0-9a-zA-Z_ .<>=!()+\-*/]+$")
-LICENSE_RE = re.compile(r"\b(cc[- ]?by|cc0|open\s+license|licen[cs]e)\b", re.IGNORECASE)
-PUBLISHER_RE = re.compile(r"\b(publisher|published\s+by|ria|information\s+system\s+authority)\b", re.IGNORECASE)
+URL_RE = re.compile(r"https?://", re.IGNORECASE)
 
 
-def _safe_eval_condition(expr: str, env: Dict[str, float]) -> bool:
+def _safe_eval_condition(expr: str, env: Dict[str, Any]) -> bool:
     if not isinstance(expr, str) or not COND_ALLOWED_RE.match(expr):
         return False
     try:
@@ -23,18 +22,31 @@ def _safe_eval_condition(expr: str, env: Dict[str, float]) -> bool:
         return False
 
 
+def _to_numeric(x: Any) -> float:
+    if x is None:
+        return float("nan")
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        s = x.strip()
+        try:
+            d = dt.date.fromisoformat(s[:10])
+            return float(d.toordinal())
+        except Exception:
+            pass
+        try:
+            return float(s)
+        except Exception:
+            return float("nan")
+    return float("nan")
+
+
 def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
     if node is None:
         return float("nan")
 
     if isinstance(node, str):
-        v = env.get(node, None)
-        if v is None:
-            return float("nan")
-        try:
-            return float(v)
-        except Exception:
-            return float("nan")
+        return _to_numeric(env.get(node, None))
 
     if isinstance(node, (int, float)):
         return float(node)
@@ -43,7 +55,7 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
         op = node["operator"]
 
         if op == "identity":
-            return _eval_expr(node.get("of"), env)
+            return _eval_expr(node.get("operand") or node.get("of"), env)
 
         if op == "add":
             return _eval_expr(node.get("left"), env) + _eval_expr(node.get("right"), env)
@@ -78,7 +90,7 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
     return float("nan")
 
 
-def _profile_df(df: pd.DataFrame, sample_n: int = 2, max_cols: int = 30) -> Dict[str, Any]:
+def _profile_df(df: pd.DataFrame, sample_n: int = 3, max_cols: int = 40) -> Dict[str, Any]:
     profile: Dict[str, Any] = {}
     cols = list(df.columns)[:max_cols]
     for col in cols:
@@ -86,168 +98,249 @@ def _profile_df(df: pd.DataFrame, sample_n: int = 2, max_cols: int = 30) -> Dict
         missing = float(s.isna().mean()) if len(s) else 0.0
         dtype = str(s.dtype)
         samples = [x for x in s.dropna().head(sample_n).astype(str).tolist()]
-        samples = [x[:60] for x in samples]
         profile[str(col)] = {"dtype": dtype, "missing": round(missing, 6), "samples": samples}
     return profile
 
 
-def _build_data_context(df: pd.DataFrame, max_cols: int = 30) -> str:
+def _build_llm_context(
+    df: pd.DataFrame,
+    dataset_description: str,
+    file_name: str,
+    file_ext: str,
+) -> str:
     cols = list(df.columns)
-    profile = _profile_df(df, sample_n=2, max_cols=max_cols)
+    profile = _profile_df(df, sample_n=3, max_cols=40)
 
     parts = []
-    parts.append(f"The dataset has {len(cols)} columns (N={len(cols)}).")
-    parts.append("Column names: " + ", ".join([str(c) for c in cols[:max_cols]]))
+    if dataset_description.strip():
+        parts.append("Portal metadata / description:")
+        parts.append(dataset_description.strip())
+        parts.append("")
+    parts.append(f"File name: {file_name}")
+    parts.append(f"File format/extension: {file_ext}")
+    parts.append(f"Dataset shape: rows={len(df)}, columns={len(cols)} (N={len(cols)}).")
+    parts.append("Column names: " + ", ".join([str(c) for c in cols[:40]]))
     parts.append("Column profile (dtype, missing ratio, sample values):")
     for col, info in profile.items():
         parts.append(f"- {col}: dtype={info['dtype']}, missing={info['missing']}, samples={info['samples']}")
     return "\n".join(parts)
 
 
-def _build_meta_context(dataset_description: str, metadata_text: str, file_name: str, file_ext: str) -> str:
-    parts = []
-    if file_name:
-        parts.append(f"File name: {file_name}")
-    if file_ext:
-        parts.append(f"File extension: {file_ext}")
-    if dataset_description:
-        parts.append("User description:")
-        parts.append(dataset_description.strip())
-    if metadata_text:
-        t = metadata_text.strip()
-        if len(t) > 3500:
-            t = t[:3500] + " …"
-        parts.append("Additional metadata/documentation text:")
-        parts.append(t)
-    return "\n".join(parts).strip()
-
-
-def _find_first_date_col(df: pd.DataFrame) -> Optional[str]:
+def _pick_date_column(df: pd.DataFrame) -> Optional[str]:
     for c in df.columns:
-        cn = str(c).lower()
-        if cn in ("date", "datetime", "time", "timestamp"):
-            return str(c)
-    for c in df.columns:
-        cn = str(c).lower()
-        if "date" in cn or "time" in cn or "timestamp" in cn:
+        if "date" in str(c).lower():
             return str(c)
     return None
 
 
-def _infer_standardizable_columns(df: pd.DataFrame) -> int:
-    count = 0
+def _auto_inputs_from_df(df: pd.DataFrame) -> Dict[str, Any]:
+    auto_inputs: Dict[str, Any] = {}
+
+    auto_inputs["nr"] = float(len(df))
+    auto_inputs["nc"] = float(df.shape[1])
+    auto_inputs["ic"] = float(df.shape[0] * df.shape[1])
+    auto_inputs["nce"] = float(df.isna().sum().sum())
+    auto_inputs["ncl"] = float(df.shape[0] * df.shape[1])
+    auto_inputs["cd"] = dt.date.today().isoformat()
+
+    date_col = _pick_date_column(df)
+    if date_col and date_col in df.columns:
+        dt_series = pd.to_datetime(df[date_col], errors="coerce", utc=True)
+        if dt_series.notna().any():
+            auto_inputs["sd_col"] = date_col
+            auto_inputs["sd"] = dt_series.min().date().isoformat()
+            auto_inputs["edp"] = dt_series.max().date().isoformat()
+            auto_inputs["max_date"] = dt_series.max().date().isoformat()
+
+            max_dt = dt_series.max()
+            nir = float((dt_series == max_dt).sum())
+            auto_inputs["nir"] = nir
+            auto_inputs["ncr_definition"] = "rows_not_at_max_date"
+            auto_inputs["ncr"] = float(len(df) - int(nir))
+
     for c in df.columns:
-        cn = str(c).lower()
-        if any(k in cn for k in ["date", "time", "timestamp", "country", "county", "commune", "region", "ehak", "iso", "code", "id", "uuid", "uri", "url"]):
-            count += 1
-    return count
+        cl = str(c).lower()
+        if cl in ("modifiedat", "modified_at", "updatedat", "updated_at", "lastmodified", "last_modified"):
+            ts = pd.to_datetime(df[c], errors="coerce", utc=True)
+            if ts.notna().any():
+                auto_inputs["dp"] = ts.max().date().isoformat()
+                auto_inputs["du"] = 1.0
+                break
+
+    cols_lower = [str(c).lower() for c in df.columns]
+    if any(x in cols_lower for x in ["id", "uuid", "identifier"]):
+        auto_inputs["id"] = 1.0
+
+    return auto_inputs
 
 
-def _infer_standardized_columns(df: pd.DataFrame) -> int:
+def _looks_like_url_series(s: pd.Series, sample_n: int = 200) -> bool:
+    vals = s.dropna().astype(str).head(sample_n).tolist()
+    return any(URL_RE.search(v) for v in vals)
+
+
+def _comprehensible_column_name(name: str) -> bool:
+    n = str(name).strip()
+    if not n:
+        return False
+    if len(n) <= 2:
+        return False
+    if re.fullmatch(r"\d+", n):
+        return False
+    if re.fullmatch(r"[A-Za-z]{1,2}\d{1,3}", n):
+        return False
+    return True
+
+
+def _heuristic_ncuf(df: pd.DataFrame) -> float:
+    return float(sum(1 for c in df.columns if _comprehensible_column_name(str(c))))
+
+
+def _heuristic_ns_nsc(df: pd.DataFrame, sample_n: int = 5000) -> Tuple[float, float]:
+    ns = 0
     nsc = 0
+    sample = df.head(sample_n)
+
     for c in df.columns:
-        cn = str(c).lower()
-        s = df[c].dropna()
-        if len(s) == 0:
+        name = str(c).lower()
+        s = sample[c]
+        if s.dropna().empty:
             continue
 
-        if "date" in cn:
-            dt = pd.to_datetime(s.astype(str), errors="coerce", utc=True)
-            if dt.notna().mean() > 0.95:
+        if "date" in name:
+            ns += 1
+            parsed = pd.to_datetime(s, errors="coerce", utc=True)
+            rate = float(parsed.notna().mean())
+            if rate >= 0.9:
                 nsc += 1
             continue
 
-        if any(k in cn for k in ["ehak", "code", "iso"]):
-            vals = s.astype(str).head(500)
-            ok = vals.str.fullmatch(r"[A-Za-z0-9\-_/]{2,15}").mean()
-            if ok > 0.90:
+        if "ehak" in name or "code" in name or name.endswith("id") or "uuid" in name:
+            ns += 1
+            vals = s.dropna().astype(str).head(200).tolist()
+            ok = 0
+            for v in vals:
+                if re.fullmatch(r"\d+", v.strip()):
+                    ok += 1
+            if vals and (ok / len(vals)) >= 0.9:
                 nsc += 1
             continue
 
-    return nsc
+    return float(ns), float(nsc)
 
 
-def _infer_comprehensible_columns(df: pd.DataFrame) -> int:
-    good = 0
-    for c in df.columns:
-        cn = str(c)
-        if len(cn) < 2:
-            continue
-        if cn.isnumeric():
-            continue
-        if re.fullmatch(r"[A-Z]{1,4}\d{0,4}", cn):
-            continue
-        good += 1
-    return good
+def _heuristic_five_star(symbol: str, df: pd.DataFrame, file_ext: str, dataset_description: str) -> Optional[float]:
+    ext = (file_ext or "").lower()
+
+    if symbol == "s2":
+        if ext in ("csv", "tsv", "xlsx", "xls", "json", "xml", "parquet"):
+            return 1.0
+        return 0.0
+
+    if symbol == "s3":
+        if ext in ("csv", "tsv", "json", "xml"):
+            return 1.0
+        if ext in ("xlsx", "xls"):
+            return 0.0
+        return None
+
+    if symbol == "s4":
+        cols_lower = [str(c).lower() for c in df.columns]
+        if any(("id" == c) or c.endswith("id") or "uuid" in c or "uri" in c or "url" in c or "ehak" in c for c in cols_lower):
+            return 1.0
+        for c in df.columns:
+            if _looks_like_url_series(df[c]):
+                return 1.0
+        return 0.0
+
+    if symbol == "s5":
+        for c in df.columns:
+            if _looks_like_url_series(df[c]):
+                return 1.0
+        return 0.0
+
+    if symbol == "s1":
+        desc = dataset_description.lower()
+        if "license" in desc or "licence" in desc or "cc by" in desc or "creative commons" in desc:
+            return 1.0
+        if dataset_description.strip():
+            return 0.0
+        return None
+
+    return None
 
 
-def _auto_symbol(sym: str, df: pd.DataFrame, auto_inputs: Dict[str, Any], meta_context: str, file_ext: str, dataset_description: str) -> Tuple[Optional[Any], str]:
+def _auto_symbol(
+    sym: str,
+    df: pd.DataFrame,
+    auto_inputs: Dict[str, Any],
+    dataset_description: str,
+    file_name: str,
+    file_ext: str,
+) -> Tuple[Optional[Any], str]:
     if sym in auto_inputs:
         return auto_inputs[sym], "auto"
 
-    cols_lower = [str(c).lower() for c in df.columns]
-    ext = (file_ext or "").lower().lstrip(".")
-
-    if sym == "t":
-        if dataset_description.strip() or auto_inputs.get("file_name"):
-            return 1.0, "auto"
-
-    if sym == "d":
-        if dataset_description.strip() or meta_context.strip():
-            return 1.0, "auto"
-
-    if sym == "id":
-        if any(x in cols_lower for x in ["id", "uuid", "identifier", "uri", "url"]):
-            return 1.0, "auto"
-
-    if sym == "dp":
-        for c in df.columns:
-            if str(c).lower() in ("modifiedat", "modified_at", "updatedat", "updated_at", "lastmodified", "last_modified"):
-                dt = pd.to_datetime(df[c], errors="coerce", utc=True)
-                if dt.notna().any():
-                    return dt.max().date().isoformat(), "auto"
-        if "max_date" in auto_inputs:
-            return auto_inputs["max_date"], "auto"
-
-    if sym == "du":
-        if any(x in cols_lower for x in ["modifiedat", "modified_at", "updatedat", "updated_at", "lastmodified", "last_modified"]):
-            return 1.0, "auto"
-
-    if sym == "s2":
-        if ext in ("csv", "json", "xml", "parquet"):
-            return 1.0, "auto"
-        if ext in ("xlsx", "xls"):
-            return 1.0, "auto"
-        return 0.0, "auto"
-
-    if sym == "s3":
-        return (1.0 if ext in ("csv", "json", "xml") else 0.0), "auto"
-
-    if sym == "s4":
-        if any(k in cols_lower for k in ["uri", "url", "id", "uuid"]):
-            return 1.0, "auto"
-        return 0.0, "auto"
-
-    if sym == "s5":
-        for c in df.columns:
-            if "url" in str(c).lower() or "uri" in str(c).lower():
-                s = df[c].dropna().astype(str).head(50)
-                if (s.str.contains(r"https?://", regex=True).mean() or 0.0) > 0.2:
-                    return 1.0, "auto"
-        return 0.0, "auto"
-
-    if sym == "s1":
-        if LICENSE_RE.search(meta_context):
-            return 1.0, "auto"
-        return None, ""
-
-    if sym == "pb":
-        if PUBLISHER_RE.search(meta_context):
-            return 1.0, "auto"
-        return None, ""
+    if sym in ("s1", "s2", "s3", "s4", "s5"):
+        v = _heuristic_five_star(sym, df, file_ext, dataset_description)
+        if v is not None:
+            return v, "auto"
 
     if sym == "ncuf":
-        return float(_infer_comprehensible_columns(df)), "auto"
+        return _heuristic_ncuf(df), "auto"
+
+    if sym in ("ns", "nsc"):
+        ns, nsc = _heuristic_ns_nsc(df)
+        return (ns, "auto") if sym == "ns" else (nsc, "auto")
+
+    desc = (dataset_description or "").strip()
+
+    if sym == "t":
+        if desc or file_name:
+            return 1.0, "auto"
+        return 0.0, "auto"
+
+    if sym == "d":
+        if len(desc) >= 20:
+            return 1.0, "auto"
+        if desc:
+            return 0.0, "auto"
+        return None, ""
+
+    if sym == "dc":
+        if re.search(r"\b(created|issued|publication|published)\b", desc, re.IGNORECASE) and re.search(r"\d{4}-\d{2}-\d{2}", desc):
+            return 1.0, "auto"
+        if desc:
+            return 0.0, "auto"
+        return None, ""
+
+    if sym in ("pb", "s"):
+        if re.search(r"\b(publisher|publisher organization|publishing|source|andmeallikas|asutus|amet|ministeerium)\b", desc, re.IGNORECASE):
+            return 1.0, "auto"
+        if desc:
+            return 0.0, "auto"
+        return None, ""
+
+    if sym == "c":
+        if re.search(r"\b(category|theme|topic|subject|valdkond|teema)\b", desc, re.IGNORECASE):
+            return 1.0, "auto"
+        if desc:
+            return 0.0, "auto"
+        return None, ""
+
+    if sym == "l":
+        if re.search(r"\b(language|keel)\b", desc, re.IGNORECASE):
+            return 1.0, "auto"
+        if desc:
+            return 0.0, "auto"
+        return None, ""
+
+    if sym == "lu":
+        if re.search(r"\b(changelog|version|history|muudat)\b", desc, re.IGNORECASE):
+            return 1.0, "auto"
+        if desc:
+            return 0.0, "auto"
+        return None, ""
 
     return None, ""
 
@@ -259,7 +352,6 @@ def compute_metrics(
     use_llm: bool,
     hf_runner,
     dataset_description: str = "",
-    metadata_text: str = "",
     file_name: str = "",
     file_ext: str = "",
     weight_by_confidence: bool = False,
@@ -269,85 +361,21 @@ def compute_metrics(
     if not isinstance(vetro, dict):
         vetro = {}
 
+    labels_map = {}
+    if isinstance(vetro.get("labels"), dict):
+        labels_map = vetro.get("labels") or {}
+
     prompts = (prompt_cfg or {}).get("symbols", {}) or {}
     if not isinstance(prompts, dict):
         prompts = {}
 
-    env: Dict[str, Any] = {}
-    env["N"] = int(df.shape[1])
-    env["R"] = int(df.shape[0])
-
-    auto_inputs: Dict[str, Any] = {}
-    auto_inputs["file_name"] = file_name
-    auto_inputs["file_ext"] = (file_ext or "").lower().lstrip(".")
-
-    auto_inputs["nc"] = int(df.shape[1])
-    auto_inputs["nr"] = int(df.shape[0])
-    auto_inputs["ncl"] = float(df.shape[0] * df.shape[1])
-
-    empty_mask = df.isna()
-    try:
-        obj = df.select_dtypes(include=["object", "string"])
-        if not obj.empty:
-            empty_str = obj.fillna("").astype(str).apply(lambda s: s.str.strip().eq("")).to_numpy().sum()
-            empty_mask = empty_mask | (df.select_dtypes(include=["object", "string"]).fillna("").astype(str).apply(lambda s: s.str.strip().eq("")))
-            auto_inputs["nce"] = float(empty_mask.sum().sum())
-        else:
-            auto_inputs["nce"] = float(empty_mask.sum().sum())
-    except Exception:
-        auto_inputs["nce"] = float(empty_mask.sum().sum())
-
-    auto_inputs["nir"] = float(empty_mask.any(axis=1).sum())
-    auto_inputs["ic"] = float(df.shape[0] * df.shape[1] - auto_inputs["nce"])
-
-    auto_inputs["ns"] = float(_infer_standardizable_columns(df))
-    auto_inputs["nsc"] = float(_infer_standardized_columns(df))
-
-    date_col = _find_first_date_col(df)
-    if date_col is not None:
-        dt = pd.to_datetime(df[date_col], errors="coerce", utc=True)
-        if dt.notna().any():
-            auto_inputs["sd_col"] = str(date_col)
-            auto_inputs["sd"] = dt.min().date().isoformat()
-            auto_inputs["edp"] = dt.max().date().isoformat()
-            auto_inputs["max_date"] = dt.max().date().isoformat()
-
-    auto_inputs["cd"] = pd.Timestamp.utcnow().date().isoformat()
-
-    if "max_date" in auto_inputs:
-        auto_inputs["ed"] = auto_inputs["max_date"]
-
-    for k, v in auto_inputs.items():
-        env[k] = v
-
-    if "sd_col" in auto_inputs and "max_date" in auto_inputs:
-        col = auto_inputs["sd_col"]
-        dt = pd.to_datetime(df[col], errors="coerce", utc=True)
-        max_dt = pd.to_datetime(auto_inputs["max_date"], errors="coerce", utc=True)
-        if dt.notna().any() and max_dt is not pd.NaT:
-            auto_inputs["ncr_definition"] = "rows_not_at_max_date"
-            auto_inputs["ncr"] = float((dt.dt.date != max_dt.date()).sum())
-            env["ncr"] = auto_inputs["ncr"]
-
-    data_context = _build_data_context(df)
-    meta_context = _build_meta_context(dataset_description, metadata_text, file_name, file_ext)
-
-    metadata_symbols = {
-        "c", "cv", "d", "dc", "du", "lu", "s", "pb", "l",
-        "s1", "s2", "s3", "s4", "s5", "t",
-        "dp", "sd", "edp", "ed",
-    }
-
-    llm_raw: Dict[str, str] = {}
-    llm_evidence: Dict[str, str] = {}
-    llm_conf: Dict[str, float] = {}
-
-    symbol_values: Dict[str, Any] = {}
-    symbol_source: Dict[str, str] = {}
+    auto_inputs = _auto_inputs_from_df(df)
 
     required_symbols = set()
-    for _, dim_obj in vetro.items():
+    for dim, dim_obj in vetro.items():
         if not isinstance(dim_obj, dict):
+            continue
+        if dim == "labels":
             continue
         for _, metric_obj in dim_obj.items():
             if not isinstance(metric_obj, dict):
@@ -357,80 +385,123 @@ def compute_metrics(
                     for _, sym in inp.items():
                         required_symbols.add(sym)
 
-    CONF_THRESHOLD = 0.25
+    context = _build_llm_context(df, dataset_description, file_name, file_ext)
+
+    env: Dict[str, Any] = {}
+    for k, v in auto_inputs.items():
+        env[k] = v
+
+    llm_raw: Dict[str, str] = {}
+    symbol_rows: List[Dict[str, Any]] = []
+
+    def sym_type(sym: str) -> str:
+        if sym in ("sd", "edp", "dp", "ed", "cd", "max_date"):
+            return "date"
+        cfg = prompts.get(sym) if isinstance(prompts.get(sym), dict) else {}
+        t = str(cfg.get("type", "")).strip()
+        return t if t else "number"
 
     for sym in sorted(required_symbols):
-        auto_val, auto_src = _auto_symbol(sym, df, auto_inputs, meta_context, file_ext, dataset_description)
-        if auto_src == "auto" and auto_val is not None:
-            env[sym] = auto_val
-            symbol_values[sym] = auto_val
-            symbol_source[sym] = "auto"
-            continue
+        stype = sym_type(sym)
 
-        llm_context = meta_context if sym in metadata_symbols else data_context
-        if sym in metadata_symbols and not meta_context:
-            llm_context = data_context
+        auto_val, auto_src = _auto_symbol(sym, df, auto_inputs, dataset_description, file_name, file_ext)
+        if auto_src == "auto":
+            raw_val = auto_val
+            conf = 1.0
+            evidence = ""
+            raw_text = ""
+            source = "auto"
+        else:
+            raw_val = None
+            conf = 0.0
+            evidence = ""
+            raw_text = ""
+            source = "fail"
 
-        if use_llm and hf_runner is not None and sym in prompts:
-            val, evidence, conf, raw = infer_symbol(
-                symbol=sym,
-                context=llm_context,
-                N=int(df.shape[1]),
-                prompt_defs=prompts,
-                hf_runner=hf_runner,
-            )
+            if use_llm and hf_runner is not None and sym in prompts:
+                val, raw_text, conf, evidence = infer_symbol(
+                    symbol=sym,
+                    context=context,
+                    N=int(df.shape[1]),
+                    prompt_defs=prompts,
+                    hf_runner=hf_runner,
+                    extra_values={
+                        "dataset_description": dataset_description,
+                        "columns": ", ".join([str(c) for c in df.columns]),
+                        "profile": "",
+                        "file_name": file_name,
+                        "file_ext": file_ext,
+                    },
+                )
+                llm_raw[sym] = raw_text
+                raw_val = val
+                source = "llm" if val is not None else "fail"
 
-            llm_raw[sym] = str(raw or "").strip()
-            llm_conf[sym] = float(conf or 0.0)
-            llm_evidence[sym] = str(evidence or "").strip()
+        effective_val = raw_val
+        if raw_val is None and stype != "date":
+            effective_val = 0.0
 
-            if val is None or float(conf or 0.0) < CONF_THRESHOLD:
-                symbol_values[sym] = None
-                symbol_source[sym] = "fail"
-                typ = str(prompts.get(sym, {}).get("type", "binary"))
-                env[sym] = 0.0 if typ in ("binary", "count_0_to_N", "count", "number") else None
-            else:
-                v = val
-                if weight_by_confidence and isinstance(v, (int, float)):
-                    v = float(v) * float(conf)
-                env[sym] = v
-                symbol_values[sym] = v
-                symbol_source[sym] = "llm"
-            continue
+        if weight_by_confidence and source == "llm" and effective_val is not None and stype != "date":
+            try:
+                effective_val = float(effective_val) * float(conf)
+            except Exception:
+                pass
 
-        symbol_values[sym] = None
-        symbol_source[sym] = "fail"
-        typ = str(prompts.get(sym, {}).get("type", "binary"))
-        env[sym] = 0.0 if typ in ("binary", "count_0_to_N", "count", "number") else None
+        env[sym] = effective_val
+
+        symbol_rows.append(
+            {
+                "symbol": sym,
+                "value (None=did not work)": raw_val,
+                "effective_value": effective_val,
+                "source": source,
+                "confidence": round(float(conf), 3) if conf is not None else None,
+                "evidence": evidence,
+                "raw": raw_text,
+            }
+        )
 
     rows = []
     for dim, dim_obj in vetro.items():
-        if not isinstance(dim_obj, dict):
+        if not isinstance(dim_obj, dict) or dim == "labels":
             continue
+
         for metric_key, metric_obj in dim_obj.items():
             if not isinstance(metric_obj, dict):
                 continue
 
-            f_assign = (metric_obj.get("formula") or {}).get("assign")
-            f_expr = (metric_obj.get("formula") or {}).get("expression")
-            if f_assign and f_expr:
-                env[f_assign] = _eval_expr(f_expr, env)
+            intermediate = metric_obj.get("intermediate_calculation")
+            if intermediate:
+                steps = intermediate if isinstance(intermediate, list) else [intermediate]
+                for step in steps:
+                    if not isinstance(step, dict):
+                        continue
+                    assign = step.get("assign")
+                    expr = step.get("expression")
+                    if assign and expr:
+                        env[assign] = _eval_expr(expr, env)
 
-            n_assign = (metric_obj.get("normalization") or {}).get("assign")
-            n_expr = (metric_obj.get("normalization") or {}).get("expression")
+            f = metric_obj.get("formula") or {}
+            if isinstance(f, dict) and f.get("assign") and f.get("expression") is not None:
+                env[str(f["assign"])] = _eval_expr(f.get("expression"), env)
+
+            n = metric_obj.get("normalization") or {}
             value = float("nan")
-            if n_assign and n_expr:
-                value = _eval_expr(n_expr, env)
-                env[n_assign] = value
+            if isinstance(n, dict) and n.get("assign") and n.get("expression") is not None:
+                value = _eval_expr(n.get("expression"), env)
+                env[str(n["assign"])] = value
+
+            metric_id = f"{dim}.{metric_key}"
+            label = labels_map.get(metric_id, metric_id)
 
             rows.append(
                 {
                     "dimension": dim,
                     "metric": metric_key,
-                    "metric_id": f"{dim}.{metric_key}",
+                    "metric_id": metric_id,
                     "value": value,
                     "description": metric_obj.get("description", ""),
-                    "metric_label": metric_obj.get("metric_label", f"{dim}.{metric_key}"),
+                    "metric_label": label,
                 }
             )
 
@@ -438,15 +509,7 @@ def compute_metrics(
 
     details = {
         "auto_inputs": auto_inputs,
-        "symbol_values": symbol_values,
-        "symbol_source": symbol_source,
-        "llm_confidence": llm_conf,
+        "symbols": symbol_rows,
         "llm_raw": llm_raw,
-        "llm_evidence": llm_evidence,
-        "contexts": {
-            "meta_context_used": bool(meta_context),
-            "data_context_preview": data_context[:800] + (" …" if len(data_context) > 800 else ""),
-            "meta_context_preview": meta_context[:800] + (" …" if len(meta_context) > 800 else ""),
-        },
     }
     return metrics_df, details
