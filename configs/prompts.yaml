@@ -1,11 +1,12 @@
 meta:
-  name: Vetrò symbol prompting pack (heuristic)
+  name: "Vetrò symbol prompting pack (heuristic)"
   version: "2.0"
   notes:
-    - Heuristic mode: if explicit metadata is missing, infer from column names, sample values and common open-data patterns.
-    - Output format is strict for parsing: answer 0/1 (or integer/date), plus confidence 0..1.
-    - Placeholders (optional): {dataset_description}, {columns}, {profile}, {N}.
-    - Expected outputs:
+    - "Heuristic mode: if explicit metadata is missing, infer from column names, sample values and common open-data patterns."
+    - "Output format is strict for parsing: answer 0/1 (or integer/date), plus confidence 0..1."
+    - "Placeholders (optional): {dataset_description}, {columns}, {profile}, {N}."
+    - |
+      Expected outputs:
       - binary -> answer: 0/1
       - count_0_to_N -> answer: integer 0..N
       - date -> answer: YYYY-MM-DD or UNKNOWN
@@ -35,7 +36,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-column OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -49,7 +50,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-column OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -63,7 +64,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-column OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -130,7 +131,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-topic OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -144,7 +145,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-description OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -158,7 +159,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-columns OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -172,7 +173,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-column OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -186,7 +187,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-organisation OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -200,7 +201,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-columns OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -214,7 +215,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-values OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -228,7 +229,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-portal-context OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -242,7 +243,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-tabular-structure OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -256,7 +257,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-format OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -270,7 +271,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-identifier-pattern OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -285,7 +286,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: 1 or 0
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: quote OR inferred-from-linking OR none
       Rules: Do NOT answer Yes/No. No extra text.
 
@@ -298,7 +299,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: integer from 0 to N
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: short reason (or none)
       Rules: answer must be an integer only. Do NOT output code.
 
@@ -311,7 +312,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: integer from 0 to N
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: short reason (or none)
       Rules: answer must be an integer only. Do NOT output code.
 
@@ -324,7 +325,7 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: integer from 0 to N
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: list 1-3 example columns (or none)
       Rules: answer must be an integer only. Do NOT output code.
 
@@ -337,6 +338,6 @@ symbols:
 
       Return EXACTLY 3 lines:
       answer: integer from 0 to N
-      confidence: 0.0 to 1.0
+      confidence: number from 0.0 to 1.0
       evidence: list 1-3 example columns (or none)
       Rules: answer must be an integer only. Do NOT output code.
