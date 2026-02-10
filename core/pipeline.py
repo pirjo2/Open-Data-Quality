@@ -14,12 +14,14 @@ def run_quality_assessment(
     prompts_yaml_path: str,
     use_llm: bool,
     hf_model_name: str,
+    *,
     dataset_description: str = "",
-    file_ext: str = "",
     file_name: str = "",
-    confidence_weighting: bool = True,
-    **_ignored_kwargs,
+    file_ext: str = "",
+    min_symbol_confidence: float = 0.35,
+    apply_confidence_weighting: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+
     formulas_cfg = load_vetro_yaml(formulas_yaml_path)
     prompt_cfg = load_prompts_yaml(prompts_yaml_path)
 
@@ -34,9 +36,10 @@ def run_quality_assessment(
         use_llm=use_llm,
         hf_runner=hf_runner,
         dataset_description=dataset_description,
-        file_ext=file_ext,
         file_name=file_name,
-        confidence_weighting=confidence_weighting,
+        file_ext=file_ext,
+        min_symbol_confidence=min_symbol_confidence,
+        apply_confidence_weighting=apply_confidence_weighting,
     )
 
     return df, metrics_df, details
