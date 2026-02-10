@@ -1,206 +1,256 @@
 from __future__ import annotations
 
-import io
-import hashlib
-import os
-from typing import Tuple
+from pathlib import Path
+from typing import Optional
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from core.pipeline import run_quality_assessment
 
-# ---- Paths (repo root) ----
-FORMULAS = "configs/formulas.yaml"
-PROMPTS = "configs/prompts.yaml"
 
-st.set_page_config(page_title="Open Data Quality Assessment", layout="wide")
+# -------------------------------------------------------------------
+# Basic configuration
+# -------------------------------------------------------------------
+st.set_page_config(
+    page_title="Open Data Quality Assessment",
+    layout="wide",
+)
+
+REPO_ROOT = Path(__file__).parent
+CONFIG_DIR = REPO_ROOT / "configs"
+FORMULAS = CONFIG_DIR / "formulas.yaml"
+PROMPTS = CONFIG_DIR / "prompts.yaml"
 
 
-def sha16(b: bytes) -> str:
-    return hashlib.sha256(b).hexdigest()[:16]
-
-
-def sha16_text(s: str) -> str:
-    return hashlib.sha256((s or "").encode("utf-8")).hexdigest()[:16]
-
-
-def load_dataset(uploaded_file, max_rows: int) -> Tuple[pd.DataFrame, str, str]:
-    """
-    Returns: df, file_name, file_ext
-    max_rows=0 => load all rows
-    """
-    file_name = uploaded_file.name
-    ext = os.path.splitext(file_name)[1].lower().lstrip(".")
-    data = uploaded_file.getvalue()
-
-    nrows = None if (not max_rows or max_rows <= 0) else int(max_rows)
-
+# -------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------
+def _load_table(file, ext: str, max_rows: int) -> pd.DataFrame:
+    ext = ext.lower()
     if ext in ("csv", "txt"):
-        # Try a few encodings; keep it simple and robust.
-        last_err = None
-        for enc in ("utf-8", "utf-8-sig", "cp1252", "latin1"):
-            try:
-                df = pd.read_csv(
-                    io.BytesIO(data),
-                    encoding=enc,
-                    low_memory=False,
-                    nrows=nrows,
-                )
-                return df, file_name, ext
-            except Exception as e:
-                last_err = e
-        raise ValueError(
-            "Failed to read CSV (encoding issue). Try saving the file as UTF-8."
-        ) from last_err
+        # Try comma first, then fall back to semicolon
+        try:
+            df = pd.read_csv(file)
+        except Exception:
+            df = pd.read_csv(file, sep=";")
+    elif ext in ("tsv",):
+        df = pd.read_csv(file, sep="\t")
+    elif ext in ("xls", "xlsx"):
+        df = pd.read_excel(file)
+    else:
+        raise ValueError(f"Unsupported file extension: {ext}")
 
-    if ext in ("xlsx", "xls"):
-        df = pd.read_excel(io.BytesIO(data))
-        if nrows is not None:
-            df = df.head(nrows).copy()
-        return df, file_name, ext
-
-    if ext in ("json",):
-        df = pd.read_json(io.BytesIO(data))
-        if nrows is not None:
-            df = df.head(nrows).copy()
-        return df, file_name, ext
-
-    raise ValueError(f"Unsupported file type .{ext}. Please use CSV/XLSX/JSON.")
+    if max_rows > 0 and len(df) > max_rows:
+        df = df.head(max_rows)
+    return df
 
 
-def make_chart_df(metrics_df: pd.DataFrame) -> pd.DataFrame:
-    out = metrics_df.copy()
-    out["value"] = pd.to_numeric(out["value"], errors="coerce")
-    out = out.dropna(subset=["value"])
-    out["label"] = out.get("metric_label", out.get("metric_id", "")).fillna(out["metric_id"])
-    return out[["label", "value", "dimension", "metric_id"]]
+def _safe_metrics_value(v) -> Optional[float]:
+    try:
+        f = float(v)
+        if pd.isna(f):
+            return None
+        return f
+    except Exception:
+        return None
 
 
-st.title("Open Data Quality Assessment (Vetrò + AI)")
+# -------------------------------------------------------------------
+# UI
+# -------------------------------------------------------------------
+st.title("Open Data Quality Assessment")
 
-with st.sidebar:
-    st.header("Input")
+st.markdown(
+    """
+Upload an open data file (CSV, TSV, or Excel) and get an automatic quality profile
+based on the Vetrò et al. methodology (traceability, currentness, completeness,
+compliance, understandability, accuracy).
 
+The app combines **direct computations** from the data with **AI-assisted heuristics**
+for metadata fields that are not present in the file itself.
+"""
+)
+
+# --- File upload + basic info -------------------------------------------------
+with st.container():
     uploaded = st.file_uploader(
-        "Upload a dataset (CSV / XLSX / JSON)",
-        type=["csv", "txt", "xlsx", "xls", "json"],
+        "Upload a tabular dataset (CSV, TSV, XLSX)",
+        type=["csv", "tsv", "txt", "xls", "xlsx"],
     )
 
-    max_rows = st.number_input("Max rows (0 = all rows)", min_value=0, value=0, step=1000)
-
-    st.divider()
-    st.header("AI (optional)")
-
-    use_llm = st.toggle("Use a Hugging Face model", value=True)
-
-    model_choices = [
-        "google/flan-t5-small",
-        "google/flan-t5-base",
-        # A lightweight extra option (often OK on CPU, still not “instant”):
-        "google/flan-t5-large",
-    ]
-    hf_model = st.selectbox("Model", options=model_choices, index=1)
-    custom_model = st.text_input("Or type a custom HF model id (optional)", value="")
-    if custom_model.strip():
-        hf_model = custom_model.strip()
-
-    st.divider()
-    st.header("Extra context for AI (optional)")
-
     dataset_description = st.text_area(
-        "Short description (1–5 sentences). Source, meaning of columns, time period, etc.",
-        value="",
+        "Optional dataset description / metadata (copy from portal if available)",
+        help="This text is passed to the AI model together with column names and basic profiling.",
         height=120,
     )
 
-run_btn = st.button("Run assessment", type="primary", width="stretch")
+    col_params = st.columns(3)
+    with col_params[0]:
+        max_rows = st.number_input(
+            "Maximum rows to analyse (0 = all rows)",
+            min_value=0,
+            value=50000,
+            step=1000,
+        )
+    with col_params[1]:
+        use_llm = st.checkbox(
+            "Use AI-assisted metadata estimation",
+            value=True,
+            help="If disabled, only metrics that can be derived directly from the data are computed.",
+        )
+    with col_params[2]:
+        model_choice = st.selectbox(
+            "Hugging Face model",
+            options=[
+                "google/flan-t5-base",
+                "google/flan-t5-small",
+                "t5-small",
+                "custom...",
+            ],
+            index=0,
+        )
+    if model_choice == "custom...":
+        hf_model_name = st.text_input(
+            "Custom HF model name",
+            value="google/flan-t5-base",
+            help="Any Seq2Seq or causal text model from HuggingFace Hub (must fit into available memory).",
+        )
+    else:
+        hf_model_name = model_choice
 
-# Keep last results even if Streamlit reruns (e.g., after download)
-if "results" not in st.session_state:
-    st.session_state["results"] = {}
-if "last_key" not in st.session_state:
-    st.session_state["last_key"] = None
+run_button = st.button("Run assessment", type="primary", disabled=uploaded is None)
 
-if uploaded is None and st.session_state["last_key"] is None:
-    st.info("Upload a file and click **Run assessment**.")
+if uploaded is None:
+    st.info("Upload a dataset to get started.")
     st.stop()
 
-cache_key = None
-if uploaded is not None:
-    file_bytes = uploaded.getvalue()
-    desc_hash = sha16_text(dataset_description)
-    cache_key = f"{sha16(file_bytes)}:{int(max_rows)}:{int(use_llm)}:{hf_model}:{desc_hash}"
+# -------------------------------------------------------------------
+# Load data
+# -------------------------------------------------------------------
+file_ext = Path(uploaded.name).suffix.lstrip(".") or "csv"
 
-if run_btn:
-    if uploaded is None:
-        st.warning("Please upload a file first.")
+try:
+    df = _load_table(uploaded, file_ext, max_rows=max_rows)
+except Exception as e:
+    st.error(f"Failed to read file: {e}")
+    st.stop()
+
+st.subheader("Dataset preview")
+st.write(f"{len(df)} rows × {len(df.columns)} columns used in the analysis.")
+st.dataframe(df.head(30), use_container_width=True)
+
+
+# -------------------------------------------------------------------
+# Run assessment
+# -------------------------------------------------------------------
+if run_button:
+    if not FORMULAS.exists() or not PROMPTS.exists():
+        st.error(
+            f"Configuration files not found. Expected:\n- {FORMULAS}\n- {PROMPTS}"
+        )
         st.stop()
 
-    with st.spinner("Loading file and computing metrics..."):
-        df, file_name, ext = load_dataset(uploaded, int(max_rows))
-        _, metrics_df, details = run_quality_assessment(
-            df=df,
-            formulas_yaml_path=FORMULAS,
-            prompts_yaml_path=PROMPTS,
-            use_llm=use_llm,
-            hf_model_name=hf_model,
-            dataset_description=dataset_description,
-            file_name=file_name,
-            file_ext=ext,
-        )
-        st.session_state["results"][cache_key] = (df, metrics_df, details)
-        st.session_state["last_key"] = cache_key
+    with st.spinner("Computing quality metrics... this may take a bit if the model is large."):
+        try:
+            _, metrics_df, details = run_quality_assessment(
+                df=df,
+                formulas_yaml_path=str(FORMULAS),
+                prompts_yaml_path=str(PROMPTS),
+                use_llm=use_llm,
+                hf_model_name=hf_model_name,
+                dataset_description=dataset_description,
+                file_name=uploaded.name,
+                file_ext=file_ext,
+            )
+        except Exception as e:
+            st.error(f"Failed to run assessment: {e}")
+            st.stop()
 
-key_to_show = cache_key if (cache_key in st.session_state["results"]) else st.session_state["last_key"]
-if key_to_show is None or key_to_show not in st.session_state["results"]:
-    st.warning("Click **Run assessment** to see results.")
-    st.stop()
+    # -------------------------------------------------------------------
+    # Metrics summary
+    # -------------------------------------------------------------------
+    st.subheader("Quality metrics")
 
-df, metrics_df, details = st.session_state["results"][key_to_show]
+    if metrics_df.empty:
+        st.warning("No metrics could be computed.")
+    else:
+        # Clean up NaNs for display
+        metrics_df_display = metrics_df.copy()
+        metrics_df_display["value_display"] = metrics_df_display["value"].apply(_safe_metrics_value)
 
-st.subheader("Preview")
-st.dataframe(df.head(20), width="stretch")
-
-st.subheader("Metrics")
-cols = [c for c in ["dimension", "metric", "metric_id", "value", "metric_label"] if c in metrics_df.columns]
-st.dataframe(metrics_df[cols], width="stretch")
-
-chart_df = make_chart_df(metrics_df)
-if not chart_df.empty:
-    st.subheader("Bar chart")
-    st.bar_chart(chart_df.set_index("label")["value"], height=380)
-
-with st.expander("Debug (auto inputs, symbols, LLM raw)"):
-    st.write("Auto inputs (derived from data):")
-    st.json(details.get("auto_inputs", {}))
-
-    sym_vals = details.get("symbol_values", {}) or {}
-    sym_src = details.get("symbol_source", {}) or {}
-    sym_conf = details.get("llm_confidence", {}) or {}
-    sym_ev = details.get("llm_evidence", {}) or {}
-    sym_raw = details.get("llm_raw", {}) or {}
-
-    rows = []
-    for k in sorted(set(sym_vals.keys()) | set(sym_src.keys())):
-        v = sym_vals.get(k, None)
-        rows.append(
-            {
-                "symbol": k,
-                "value": v,
-                "source": sym_src.get(k, ""),
-                "confidence": sym_conf.get(k, None),
-                "evidence": sym_ev.get(k, ""),
-                "raw": (sym_raw.get(k, "") or "")[:500],  # keep UI snappy
-            }
+        # Order by dimension for nicer layout
+        metrics_df_display = metrics_df_display.sort_values(
+            by=["dimension", "metric"]
         )
 
-    sym_df = pd.DataFrame(rows)
+        st.dataframe(
+            metrics_df_display[["dimension", "metric", "metric_id", "value_display", "description"]],
+            use_container_width=True,
+            hide_index=True,
+        )
 
-    # ---- Arrow-safe display: split numeric vs text ----
-    sym_df["value_num"] = pd.to_numeric(sym_df["value"], errors="coerce")
-    sym_df["value_text"] = sym_df["value"].apply(lambda x: "" if x is None else str(x))
-    sym_df["confidence"] = pd.to_numeric(sym_df["confidence"], errors="coerce")
-    sym_df = sym_df.drop(columns=["value"])
+        # Simple bar chart of non-NaN values
+        chart_df = metrics_df_display.dropna(subset=["value_display"]).copy()
+        if not chart_df.empty:
+            chart_df["metric_full"] = chart_df["dimension"] + " · " + chart_df["metric"]
+            fig = px.bar(
+                chart_df,
+                x="metric_full",
+                y="value_display",
+                color="dimension",
+                title="Normalised metric values (0–1)",
+            )
+            fig.update_layout(
+                xaxis_title="Metric",
+                yaxis_title="Value (0–1)",
+                xaxis_tickangle=-45,
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-    st.dataframe(sym_df, width="stretch")
+        # Download CSV of metrics
+        csv_bytes = metrics_df_display.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download metrics as CSV",
+            data=csv_bytes,
+            file_name="open_data_quality_metrics.csv",
+            mime="text/csv",
+        )
+
+    # -------------------------------------------------------------------
+    # Debug / diagnostics
+    # -------------------------------------------------------------------
+    with st.expander("Debug: inputs and AI inferences"):
+        st.markdown("**Auto-derived inputs** (from the dataframe only):")
+        st.json(details.get("auto_inputs", {}), expanded=False)
+
+        # Per-symbol table: use string values to avoid Arrow type issues
+        sym_vals = details.get("symbol_values", {})
+        sym_src = details.get("symbol_source", {})
+        llm_conf = details.get("llm_confidence", {})
+        llm_raw = details.get("llm_raw", {})
+        llm_ev = details.get("llm_evidence", {})
+
+        rows = []
+        for sym in sorted(details.get("required_symbols", sym_vals.keys())):
+            val = sym_vals.get(sym, None)
+            if val is None:
+                v_str = ""
+            else:
+                v_str = str(val)
+            rows.append(
+                {
+                    "symbol": sym,
+                    "value (string)": v_str,
+                    "source": sym_src.get(sym, ""),
+                    "confidence": llm_conf.get(sym, ""),
+                    "evidence": llm_ev.get(sym, ""),
+                    "raw": llm_raw.get(sym, ""),
+                }
+            )
+        if rows:
+            debug_df = pd.DataFrame(rows)
+            st.dataframe(debug_df, use_container_width=True, hide_index=True)
+        else:
+            st.write("No symbol debug information available.")

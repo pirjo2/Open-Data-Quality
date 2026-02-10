@@ -3,16 +3,21 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple, Optional
 import math
 import re
-from datetime import date, datetime
+import datetime as _dt
 
 import pandas as pd
 
 from core.llm import infer_symbol
 
 COND_ALLOWED_RE = re.compile(r"^[0-9a-zA-Z_ .<>=!()+\-*/]+$")
+DATE_ONLY_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})$")
+DATE_INNER_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
-def _safe_eval_condition(expr: str, env: Dict[str, Any]) -> bool:
+def _safe_eval_condition(expr: str, env: Dict[str, float]) -> bool:
+    """
+    Evaluate a simple numeric condition like "x >= 0.5" safely.
+    """
     if not isinstance(expr, str) or not COND_ALLOWED_RE.match(expr):
         return False
     try:
@@ -21,18 +26,66 @@ def _safe_eval_condition(expr: str, env: Dict[str, Any]) -> bool:
         return False
 
 
+def _to_float_value(v: Any) -> float:
+    """
+    Convert an environment value into a float for expression evaluation.
+    Handles ints/floats, booleans, date strings, and pandas timestamps.
+    """
+    if v is None:
+        return float("nan")
+
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+
+    if isinstance(v, (int, float)):
+        return float(v)
+
+    # Pandas / datetime objects
+    try:
+        import pandas as _pd  # local import to avoid hard dependency at import time
+
+        if isinstance(v, _pd.Timestamp):
+            return float(v.to_pydatetime().date().toordinal())
+    except Exception:
+        pass
+
+    if isinstance(v, (_dt.date, _dt.datetime)):
+        d = v.date() if isinstance(v, _dt.datetime) else v
+        return float(d.toordinal())
+
+    if isinstance(v, str):
+        s = v.strip()
+        # Try ISO date
+        m = DATE_ONLY_RE.fullmatch(s) or DATE_INNER_RE.search(s)
+        if m:
+            try:
+                d = _dt.date.fromisoformat(m.group(1))
+                return float(d.toordinal())
+            except Exception:
+                pass
+        # Try numeric
+        try:
+            return float(s)
+        except Exception:
+            return float("nan")
+
+    return float("nan")
+
+
 def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
+    """
+    Evaluate a formula expression tree coming from formulas.yaml.
+    Supports:
+      - literals (int/float)
+      - variable references (strings -> env[name])
+      - {operator: "add"/"subtract"/"multiply"/"divide"/"abs_diff"/"identity"/"conditional"}
+    """
     if node is None:
         return float("nan")
 
     if isinstance(node, str):
         v = env.get(node, None)
-        if v is None:
-            return float("nan")
-        try:
-            return float(v)
-        except Exception:
-            return float("nan")
+        return _to_float_value(v)
 
     if isinstance(node, (int, float)):
         return float(node)
@@ -42,26 +95,35 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
 
         if op == "identity":
             return _eval_expr(node.get("of"), env)
+
         if op == "add":
             return _eval_expr(node.get("left"), env) + _eval_expr(node.get("right"), env)
+
         if op == "subtract":
             return _eval_expr(node.get("left"), env) - _eval_expr(node.get("right"), env)
+
         if op == "multiply":
             return _eval_expr(node.get("left"), env) * _eval_expr(node.get("right"), env)
+
         if op == "divide":
             denom = _eval_expr(node.get("right"), env)
             if denom == 0 or math.isnan(denom):
                 return float("nan")
             return _eval_expr(node.get("left"), env) / denom
+
         if op == "abs_diff":
             return abs(_eval_expr(node.get("left"), env) - _eval_expr(node.get("right"), env))
+
         if op == "conditional":
+            # conditions: list of {if/elif/else, then}
             for rule in node.get("conditions", []) or []:
                 if not isinstance(rule, dict):
                     continue
-                if "if" in rule and _safe_eval_condition(rule["if"], env):
+                # Copy numeric env only to avoid weirdness
+                num_env = {k: _to_float_value(v) for k, v in env.items()}
+                if "if" in rule and _safe_eval_condition(str(rule["if"]), num_env):
                     return _eval_expr(rule.get("then"), env)
-                if "elif" in rule and _safe_eval_condition(rule["elif"], env):
+                if "elif" in rule and _safe_eval_condition(str(rule["elif"]), num_env):
                     return _eval_expr(rule.get("then"), env)
                 if "else" in rule:
                     return _eval_expr(rule.get("else"), env)
@@ -70,331 +132,332 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
     return float("nan")
 
 
-def _profile_df(df: pd.DataFrame, sample_n: int = 3, max_cols: int = 40) -> Dict[str, Any]:
+def _profile_df(df: pd.DataFrame, sample_n: int = 2, max_cols: int = 25) -> Dict[str, Any]:
+    """
+    Compact profiling: dtype, missing ratio, and a couple of sample values per column.
+    """
     profile: Dict[str, Any] = {}
     cols = list(df.columns)[:max_cols]
     for col in cols:
         s = df[col]
         missing = float(s.isna().mean()) if len(s) else 0.0
         dtype = str(s.dtype)
-        samples = [x for x in s.dropna().head(sample_n).astype(str).tolist()]
-        profile[str(col)] = {"dtype": dtype, "missing": round(missing, 6), "samples": samples}
+        samples = [x for x in s.dropna().astype(str).head(sample_n).tolist()]
+        profile[str(col)] = {
+            "dtype": dtype,
+            "missing": round(missing, 6),
+            "samples": samples,
+        }
     return profile
 
 
-def _build_llm_context(df: pd.DataFrame, dataset_description: str = "", file_name: str = "", file_ext: str = "") -> str:
-    cols = list(df.columns)
-    profile = _profile_df(df, sample_n=3, max_cols=40)
-
-    parts = []
-    if file_name:
-        parts.append(f"File name: {file_name}")
-    if file_ext:
-        parts.append(f"File type/extension: {file_ext}")
-    if dataset_description:
-        parts.append("Dataset description (from portal/user):")
-        parts.append(dataset_description.strip())
-
-    parts.append(f"The dataset has {len(cols)} columns (N={len(cols)}) and {len(df)} rows (R={len(df)}).")
-    parts.append("Column names: " + ", ".join([str(c) for c in cols[:40]]))
-    parts.append("Column profile (dtype, missing ratio, samples):")
-    for col, info in profile.items():
-        parts.append(f"- {col}: dtype={info['dtype']}, missing={info['missing']}, samples={info['samples']}")
-    return "\n".join(parts)
-
-
-def _date_to_num(d: str | date | datetime) -> Optional[int]:
-    try:
-        if isinstance(d, datetime):
-            return d.date().toordinal()
-        if isinstance(d, date):
-            return d.toordinal()
-        s = str(d).strip()
-        dt = pd.to_datetime(s, errors="coerce")
-        if pd.isna(dt):
-            return None
-        return dt.date().toordinal()
-    except Exception:
-        return None
-
-
-def _find_date_column(df: pd.DataFrame) -> Optional[str]:
-    for c in df.columns:
-        if "date" in str(c).lower():
-            return str(c)
-    return None
-
-
-def _count_empty_like(df: pd.DataFrame) -> Tuple[int, int]:
-    empty_mask = df.isna()
-    for c in df.columns:
-        if df[c].dtype == object:
-            empty_mask = empty_mask | df[c].astype(str).str.strip().eq("")
-    empty_cells = int(empty_mask.sum().sum())
-    incomplete_rows = int(empty_mask.any(axis=1).sum())
-    return empty_cells, incomplete_rows
-
-
-def _looks_like_identifier(col_name: str) -> bool:
-    cl = col_name.lower()
-    return cl in {"id", "uuid", "identifier"} or cl.endswith("_id") or "uuid" in cl
-
-
-def _is_readable_colname(col_name: str) -> bool:
-    s = str(col_name)
-    if len(s) < 3:
-        return False
-    if re.fullmatch(r"[A-Z0-9_]{2,}", s):
-        return False
-    if re.fullmatch(r"[A-Za-z]\d+", s):
-        return False
-    if re.search(r"\s", s):
-        return True
-    return bool(re.fullmatch(r"[A-Za-z0-9_\-]+", s))
-
-
-def _auto_symbol(
-    sym: str,
+def _build_llm_context(
     df: pd.DataFrame,
-    *,
-    dataset_description: str,
-    file_name: str,
-    file_ext: str,
-    auto_inputs: Dict[str, Any],
-) -> Tuple[Optional[Any], str, float, str]:
-    if sym in auto_inputs and auto_inputs[sym] is not None:
-        return auto_inputs[sym], "auto", 1.0, "derived from data"
+    dataset_description: str = "",
+    file_name: str | None = None,
+    file_ext: str | None = None,
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Build a textual context for the LLM and a small dict of extra values
+    that can be used in the prompt templates.
+    """
+    parts: list[str] = []
 
-    cols_lower = [str(c).lower() for c in df.columns]
-    N = int(df.shape[1])
+    if dataset_description:
+        parts.append("Dataset description:")
+        parts.append(dataset_description.strip())
+        parts.append("")
 
-    # human-like metadata inference (reduces "None")
-    if sym in {"t", "d"}:
-        if dataset_description.strip() or file_name.strip():
-            return 1.0, "auto", 0.6, "inferred: dataset has a name/description"
-        if N > 0:
-            return 1.0, "auto", 0.35, "inferred: column names imply dataset topic"
+    if file_name:
+        parts.append(f"File: {file_name} (type: {file_ext or 'unknown'})")
 
-    if sym == "cv":
-        has_geo = any(k in " ".join(cols_lower) for k in ["ehak", "county", "municipality", "country", "region", "maakond", "vald", "linn"])
-        has_time = _find_date_column(df) is not None
-        if has_geo or has_time:
-            return 1.0, "auto", 0.55, "inferred: geo/date columns imply coverage"
+    R, N = df.shape
+    parts.append(f"Tabular data: {R} rows, {N} columns.")
+    cols = [str(c) for c in df.columns]
+    parts.append("Column names: " + ", ".join(cols[:40]))
 
-    if sym == "id":
-        if any(_looks_like_identifier(str(c)) for c in df.columns):
-            return 1.0, "auto", 0.8, "inferred: Id/UUID column present"
+    profile = _profile_df(df, sample_n=2, max_cols=25)
+    parts.append("Column profile (dtype, missing ratio, sample values):")
+    for col, info in profile.items():
+        parts.append(
+            f"- {col}: dtype={info['dtype']}, missing={info['missing']}, samples={info['samples']}"
+        )
 
-    if sym == "s2":
-        return 1.0, "auto", 0.9, "inferred: tabular structured dataset"
+    context = "\n".join(parts)
 
-    if sym == "s3":
-        if file_ext.lower() in {"csv", "json", "xml"}:
-            return 1.0, "auto", 0.9, f"inferred: file format {file_ext}"
-        return None, "", 0.0, ""
+    extra_values = {
+        "dataset_description": dataset_description or "",
+        "columns": ", ".join(cols),
+        "profile": profile,
+        "N": N,
+        "R": R,
+        "file_name": file_name or "",
+        "file_ext": file_ext or "",
+    }
+    return context, extra_values
 
-    if sym == "s4":
-        if any(_looks_like_identifier(str(c)) for c in df.columns) or any("uri" in str(c).lower() for c in df.columns):
-            return 1.0, "auto", 0.55, "inferred: identifier-like columns"
-        if any("ehak" in str(c).lower() for c in df.columns):
-            return 1.0, "auto", 0.45, "inferred: official code columns (EHAK)"
 
-    if sym == "ncuf":
-        readable = sum(1 for c in df.columns if _is_readable_colname(str(c)))
-        return float(readable), "auto", 0.6, "inferred: readable column names"
+def _auto_base_inputs(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Heuristic automatic inputs that can be derived directly from the dataframe.
+    These do NOT use the LLM.
+    """
+    R, N = df.shape
+    auto: Dict[str, Any] = {}
 
-    if sym == "ncm":
-        readable = sum(1 for c in df.columns if _is_readable_colname(str(c)))
-        if readable / max(1, N) >= 0.7:
-            return float(N), "auto", 0.45, "inferred: column names are self-explanatory"
-        return float(readable), "auto", 0.35, "inferred: partial from readable names"
+    # Basic counts
+    auto["N"] = float(N)
+    auto["R"] = float(R)
+    auto["nc"] = float(N)  # number of columns
+    auto["nr"] = float(R)  # number of rows
 
-    return None, "", 0.0, ""
+    # Cells / completeness
+    if R > 0 and N > 0:
+        na_mask = df.isna()
+        ic = int(na_mask.to_numpy().sum())
+        nir = int(na_mask.any(axis=1).sum())
+        ncl = float(R * N)
+    else:
+        ic = 0
+        nir = 0
+        ncl = 0.0
+
+    auto["ic"] = float(ic)   # number of incomplete cells
+    auto["nir"] = float(nir) # number of incomplete rows
+    auto["ncl"] = float(ncl) # total number of cells
+    auto["nce"] = 0.0        # syntactically incorrect cells (we don't detect -> assume 0)
+
+    # Current date for time-related metrics
+    auto["cd"] = _dt.date.today().isoformat()
+
+    # Detect a date column (e.g. StatisticsDate)
+    date_col: Optional[str] = None
+    for c in df.columns:
+        name = str(c).lower()
+        if any(tok in name for tok in ("date", "kuupäev", "kuupaev", "kp")):
+            date_col = str(c)
+            break
+    if date_col is None:
+        # Fallback: first datetime64 column if present
+        for c in df.columns:
+            try:
+                if pd.api.types.is_datetime64_any_dtype(df[c]):
+                    date_col = str(c)
+                    break
+            except Exception:
+                continue
+
+    if date_col is not None and R > 0:
+        dt = pd.to_datetime(df[date_col], errors="coerce", utc=True)
+        dt_valid = dt[dt.notna()]
+        if not dt_valid.empty:
+            sd = dt_valid.min().date().isoformat()
+            edp = dt_valid.max().date().isoformat()
+            auto["sd_col"] = date_col
+            auto["sd"] = sd
+            auto["edp"] = edp
+            auto["max_date"] = edp
+
+            # "ed" (expiration of previous version) is often equal to end_date or previous period.
+            # We don't know previous version, so we approximate with current end date.
+            auto.setdefault("ed", edp)
+
+            # rows not at max date -> not current rows
+            ncr = int((dt_valid.dt.date.astype("string") != edp).sum())
+            auto["ncr"] = float(ncr)
+
+    # Publication date from typical metadata columns
+    for c in df.columns:
+        name = str(c).lower()
+        if name in (
+            "modifiedat",
+            "modified_at",
+            "updatedat",
+            "updated_at",
+            "lastmodified",
+            "last_modified",
+        ):
+            ts = pd.to_datetime(df[c], errors="coerce", utc=True)
+            ts_valid = ts[ts.notna()]
+            if not ts_valid.empty:
+                auto["dp"] = ts_valid.max().date().isoformat()
+                break
+
+    # If we still don't have dp but we have max_date, reuse that cautiously
+    if "dp" not in auto and "max_date" in auto:
+        auto["dp"] = auto["max_date"]
+
+    # du (update dates mentioned) -> if any modified/updated column exists
+    if any(
+        str(c).lower()
+        in (
+            "modifiedat",
+            "modified_at",
+            "updatedat",
+            "updated_at",
+            "lastmodified",
+            "last_modified",
+        )
+        for c in df.columns
+    ):
+        auto["du"] = 1.0
+
+    # id (identifier present) -> common patterns
+    if any(
+        str(c).lower() in ("id", "uuid", "identifier") or str(c).lower().endswith("_id")
+        for c in df.columns
+    ):
+        auto["id"] = 1.0
+
+    return auto
 
 
 def compute_metrics(
     df: pd.DataFrame,
-    formulas_cfg: Dict[str, Any],
-    prompt_cfg: Dict[str, Any],
+    vetro_cfg: Dict[str, Any],
+    prompts_cfg: Dict[str, Any],
     use_llm: bool,
     hf_runner,
-    *,
     dataset_description: str = "",
-    file_name: str = "",
-    file_ext: str = "",
-    min_symbol_confidence: float = 0.35,
-    apply_confidence_weighting: bool = True,
+    file_name: str | None = None,
+    file_ext: str | None = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    Core quality metric computation.
 
-    vetro = (formulas_cfg or {}).get("vetro_methodology") or {}
+    vetro_cfg: content of formulas.yaml["vetro_methodology"]
+    prompts_cfg: content of prompts.yaml["symbols"]
+    """
+    vetro = vetro_cfg or {}
     if not isinstance(vetro, dict):
         vetro = {}
 
-    prompts = (prompt_cfg or {}).get("symbols", {}) or {}
+    prompts = (prompts_cfg or {})
     if not isinstance(prompts, dict):
         prompts = {}
 
-    symbol_types: Dict[str, str] = {k: str(v.get("type", "binary")) for k, v in prompts.items() if isinstance(v, dict)}
+    R, N = df.shape
 
-    env: Dict[str, Any] = {"N": int(df.shape[1]), "R": int(df.shape[0])}
+    # 1) Build LLM context
+    context, extra_values = _build_llm_context(
+        df=df,
+        dataset_description=dataset_description,
+        file_name=file_name,
+        file_ext=file_ext,
+    )
 
-    auto_inputs: Dict[str, Any] = {}
-    auto_inputs["nc"] = float(df.shape[1])
-    auto_inputs["nr"] = float(df.shape[0])
-    auto_inputs["ncl"] = float(df.shape[0] * df.shape[1])
+    # 2) Seed environment with basic values and auto-derived inputs
+    env: Dict[str, Any] = {}
+    env["N"] = float(N)
+    env["R"] = float(R)
 
-    empty_cells, incomplete_rows = _count_empty_like(df)
-    auto_inputs["ic"] = float(empty_cells)
-    auto_inputs["nir"] = float(incomplete_rows)
-    auto_inputs["nce"] = 0.0
+    auto_inputs = _auto_base_inputs(df)
+    env.update(auto_inputs)
 
-    date_col = _find_date_column(df)
-    if date_col is not None:
-        dt = pd.to_datetime(df[date_col], errors="coerce")
-        if dt.notna().any():
-            sd_iso = dt.min().date().isoformat()
-            edp_iso = dt.max().date().isoformat()
-            auto_inputs["sd_col"] = str(date_col)
-            auto_inputs["sd"] = sd_iso
-            auto_inputs["edp"] = edp_iso
-            auto_inputs["max_date"] = edp_iso
-            auto_inputs["ncr"] = float(int((dt.dt.date != dt.max().date()).sum()))
-
-    auto_inputs["cd"] = date.today().isoformat()
-
-    for c in df.columns:
-        cl = str(c).lower()
-        if cl in {"modifiedat", "modified_at", "updatedat", "updated_at", "lastmodified", "last_modified"}:
-            mod = pd.to_datetime(df[c], errors="coerce")
-            if mod.notna().any():
-                auto_inputs["dp"] = mod.max().date().isoformat()
-                break
-    if "dp" not in auto_inputs and auto_inputs.get("max_date"):
-        auto_inputs["dp"] = auto_inputs["max_date"]
-
-    if auto_inputs.get("edp"):
-        auto_inputs["ed"] = auto_inputs["edp"]
-
-    for k, v in auto_inputs.items():
-        if v is None:
-            env[k] = None
-        elif symbol_types.get(k) == "date" or k in {"cd", "sd", "edp", "dp", "ed", "max_date"}:
-            env[k] = _date_to_num(v)
-        else:
-            env[k] = v
-
-    context = _build_llm_context(df, dataset_description=dataset_description, file_name=file_name, file_ext=file_ext)
-
+    # Debug collections
     llm_raw: Dict[str, str] = {}
     llm_evidence: Dict[str, str] = {}
     llm_conf: Dict[str, float] = {}
 
     symbol_values: Dict[str, Any] = {}
-    symbol_source: Dict[str, str] = {}
-    symbol_confidence: Dict[str, float] = {}
+    symbol_source: Dict[str, str] = {}  # "auto" / "llm" / "none"
 
+    # 3) Collect required symbols from YAML inputs
     required_symbols = set()
-    for dim, dim_obj in vetro.items():
-        if not isinstance(dim_obj, dict):
-            continue
-        for _, metric_obj in dim_obj.items():
-            if not isinstance(metric_obj, dict):
-                continue
-            for inp in metric_obj.get("inputs", []) or []:
-                if isinstance(inp, dict):
-                    for _, sym in inp.items():
-                        required_symbols.add(sym)
-
-    extra_values = {
-        "dataset_description": dataset_description,
-        "file_name": file_name,
-        "file_ext": file_ext,
-        "columns": ", ".join([str(c) for c in df.columns[:40]]),
-        "profile": "",
-        "N": int(df.shape[1]),
-    }
-
-    for sym in sorted(required_symbols):
-        auto_val, auto_src, auto_conf, _ = _auto_symbol(
-            sym,
-            df,
-            dataset_description=dataset_description,
-            file_name=file_name,
-            file_ext=file_ext,
-            auto_inputs=auto_inputs,
-        )
-        if auto_src == "auto" and auto_val is not None:
-            symbol_source[sym] = "auto"
-            symbol_confidence[sym] = float(auto_conf)
-            symbol_values[sym] = auto_val
-
-            if symbol_types.get(sym) == "date":
-                env[sym] = _date_to_num(auto_val)
-            else:
-                env[sym] = float(auto_val) * float(auto_conf) if apply_confidence_weighting and isinstance(auto_val, (int, float)) else auto_val
-            continue
-
-        if use_llm and hf_runner is not None and sym in prompts:
-            val, raw, conf, evid = infer_symbol(
-                symbol=sym,
-                context=context,
-                N=int(df.shape[1]),
-                prompt_defs=prompts,
-                hf_runner=hf_runner,
-                extra_values=extra_values,
-            )
-
-            llm_raw[sym] = str(raw or "").strip()
-            llm_conf[sym] = float(conf)
-            llm_evidence[sym] = str(evid or "").strip()
-
-            if val is None or float(conf) < float(min_symbol_confidence):
-                env[sym] = None
-                symbol_values[sym] = None
-                symbol_source[sym] = "fail"
-                symbol_confidence[sym] = float(conf)
-                continue
-
-            symbol_source[sym] = "llm"
-            symbol_confidence[sym] = float(conf)
-            symbol_values[sym] = val
-
-            if symbol_types.get(sym) == "date":
-                env[sym] = _date_to_num(val)
-            else:
-                env[sym] = float(val) * float(conf) if apply_confidence_weighting and isinstance(val, (int, float)) else val
-            continue
-
-        env[sym] = None
-        symbol_values[sym] = None
-        symbol_source[sym] = "fail"
-        symbol_confidence[sym] = 0.0
-
-    rows = []
-    for dim, dim_obj in vetro.items():
+    for dim_name, dim_obj in vetro.items():
         if not isinstance(dim_obj, dict):
             continue
         for metric_key, metric_obj in dim_obj.items():
             if not isinstance(metric_obj, dict):
                 continue
+            for inp in metric_obj.get("inputs", []) or []:
+                if isinstance(inp, dict):
+                    for _, sym in inp.items():
+                        required_symbols.add(str(sym))
 
-            f_assign = (metric_obj.get("formula") or {}).get("assign")
-            f_expr = (metric_obj.get("formula") or {}).get("expression")
+    # 4) Fill each symbol (auto first, then LLM if enabled, else None)
+    CONF_THRESHOLD_COUNTS = 0.25  # slightly stricter only for count symbols
+
+    for sym in sorted(required_symbols):
+        # auto base
+        if sym in auto_inputs:
+            val = auto_inputs[sym]
+            env[sym] = val
+            symbol_values[sym] = val
+            symbol_source[sym] = "auto"
+            continue
+
+        # LLM
+        if use_llm and hf_runner is not None and sym in prompts:
+            val, raw, conf, evidence = infer_symbol(
+                symbol=sym,
+                context=context,
+                N=N,
+                prompt_defs=prompts,
+                hf_runner=hf_runner,
+                extra_values=extra_values,
+            )
+
+            raw_str = str(raw or "").strip()
+            llm_raw[sym] = raw_str
+            llm_conf[sym] = float(conf or 0.0)
+            llm_evidence[sym] = evidence or ""
+
+            typ = str(prompts[sym].get("type", "binary"))
+
+            # For binary & dates: if we parsed something, trust it (no hard threshold)
+            if val is None:
+                env[sym] = None
+                symbol_values[sym] = None
+                symbol_source[sym] = "none"
+            else:
+                if typ in ("count", "count_0_to_N") and (conf or 0.0) < CONF_THRESHOLD_COUNTS:
+                    # discard very low-confidence counts (they heavily affect percentages)
+                    env[sym] = None
+                    symbol_values[sym] = None
+                    symbol_source[sym] = "none"
+                else:
+                    env[sym] = val
+                    symbol_values[sym] = val
+                    symbol_source[sym] = "llm"
+        else:
+            # No auto and no LLM
+            env[sym] = None
+            symbol_values[sym] = None
+            symbol_source[sym] = "none"
+
+    # 5) Compute metrics from formulas
+    rows: list[Dict[str, Any]] = []
+    for dim_name, dim_obj in vetro.items():
+        if not isinstance(dim_obj, dict):
+            continue
+
+        for metric_key, metric_obj in dim_obj.items():
+            if not isinstance(metric_obj, dict):
+                continue
+
+            formula_cfg = metric_obj.get("formula") or {}
+            norm_cfg = metric_obj.get("normalization") or {}
+
+            # Optional intermediate formula
+            f_assign = formula_cfg.get("assign")
+            f_expr = formula_cfg.get("expression")
             if f_assign and f_expr:
-                env[f_assign] = _eval_expr(f_expr, env)
+                env[str(f_assign)] = _eval_expr(f_expr, env)
 
-            n_assign = (metric_obj.get("normalization") or {}).get("assign")
-            n_expr = (metric_obj.get("normalization") or {}).get("expression")
+            # Normalized / final value
+            n_assign = norm_cfg.get("assign")
+            n_expr = norm_cfg.get("expression")
             value = float("nan")
             if n_assign and n_expr:
                 value = _eval_expr(n_expr, env)
-                env[n_assign] = value
+                env[str(n_assign)] = value
 
             rows.append(
                 {
-                    "dimension": dim,
+                    "dimension": dim_name,
                     "metric": metric_key,
-                    "metric_id": f"{dim}.{metric_key}",
+                    "metric_id": f"{dim_name}.{metric_key}",
                     "value": value,
                     "description": metric_obj.get("description", ""),
                 }
@@ -406,9 +469,10 @@ def compute_metrics(
         "auto_inputs": auto_inputs,
         "symbol_values": symbol_values,
         "symbol_source": symbol_source,
-        "symbol_confidence": symbol_confidence,
+        "required_symbols": sorted(required_symbols),
         "llm_confidence": llm_conf,
         "llm_raw": llm_raw,
         "llm_evidence": llm_evidence,
     }
+
     return metrics_df, details
