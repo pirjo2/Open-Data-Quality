@@ -415,6 +415,7 @@ vetro_methodology:
   labels:
   completeness.percentage_of_complete_cells: "Complete cells (%)"
   completeness.percentage_of_complete_rows: "Complete rows (%)"
+  accuracy.accuracy_in_aggregation: "Accuracy in aggregation (%)"
   accuracy.percentage_of_syntactically_accurate_cells: "Syntactically valid cells (%)"
   traceability.track_of_creation: "Creation traceability"
   traceability.track_of_updates: "Update traceability"

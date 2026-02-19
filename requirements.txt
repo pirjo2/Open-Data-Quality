@@ -9,3 +9,5 @@ transformers>=4.36,<5
 accelerate
 sentencepiece
 safetensors
+
+trino
