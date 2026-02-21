@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from core.utils import make_arrow_safe
+
+
 import os
 from typing import Optional, Tuple, Dict, Any
 
@@ -222,6 +225,7 @@ if run_btn:
         # ------------------------------------------------------------
         # Preview
         # ------------------------------------------------------------
+        df = make_arrow_safe(df)
         st.subheader("Preview of the dataset")
         st.dataframe(df.head(20), width="stretch")
         st.caption(f"{df.shape[0]} rows × {df.shape[1]} columns used for metrics.")
