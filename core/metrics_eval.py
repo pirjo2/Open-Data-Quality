@@ -8,7 +8,6 @@ from datetime import date as _date_type
 
 import pandas as pd
 
-
 # --- Turvaline tingimusavaldiste eval --- #
 COND_ALLOWED_RE = re.compile(r"^[0-9a-zA-Z_ .<>=!()+\-*/]+$")
 
@@ -27,19 +26,9 @@ def _safe_eval_condition(expr: str, env: Dict[str, Any]) -> bool:
 
 
 # --- Väljendipuu hindamine (Variant B) --- #
-
-
 def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
     """
     Evaluate a metric expression tree against the environment `env`.
-
-    Supports the operators used in the Vetrò YAML:
-    - identity (with `operand` or `of`)
-    - add (binary with left/right OR n-ary with `terms`)
-    - subtract, multiply, divide
-    - abs_diff
-    - sum (with `of`: single expr or list)
-    - conditional (with if/elif/else and simple boolean expressions)
     """
     if node is None:
         return float("nan")
@@ -57,9 +46,7 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
             try:
                 return float(v)
             except Exception:
-                # fall through to try literal parsing
                 pass
-        # Try interpret as numeric literal
         try:
             return float(node)
         except Exception:
@@ -70,11 +57,9 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
         op = node.get("operator")
 
         if op == "identity":
-            # Support both "operand" (new) and "of" (older version)
             return _eval_expr(node.get("operand", node.get("of")), env)
 
         if op == "add":
-            # N-ary add with "terms"
             if "terms" in node:
                 total = 0.0
                 for term in (node.get("terms") or []):
@@ -83,7 +68,6 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
                         v = 0.0
                     total += v
                 return total
-            # Binary add
             return _eval_expr(node.get("left"), env) + _eval_expr(node.get("right"), env)
 
         if op == "subtract":
@@ -117,7 +101,6 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
             for rule in node.get("conditions", []) or []:
                 if not isinstance(rule, dict):
                     continue
-                # if / elif / else style, where each branch has a "then" or "else" expression
                 if "if" in rule and _safe_eval_condition(rule["if"], env):
                     return _eval_expr(rule.get("then"), env)
                 if "elif" in rule and _safe_eval_condition(rule["elif"], env):
@@ -131,13 +114,11 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
 
 def _date_to_num(value: Any) -> Optional[float]:
     """
-    Convert a date-like value (ISO string, pandas Timestamp or datetime/date)
-    into a numeric day count using .toordinal(). Returns None if parsing fails.
+    Convert a date-like value into a numeric day count using .toordinal().
     """
     if value is None:
         return None
     if isinstance(value, (int, float)):
-        # assume already numeric
         return float(value)
     try:
         ts = pd.to_datetime(value, errors="coerce", utc=True)
@@ -149,15 +130,7 @@ def _date_to_num(value: Any) -> Optional[float]:
 
 
 # --- Automaatsete sisendite arvutamine --- #
-
-
 def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Derive basic metrics inputs directly from the tabular data, without LLMs.
-
-    The goal is to produce sensible defaults that work across many datasets and
-    approximate the intended Vetrò metrics when possible.
-    """
     auto: Dict[str, Any] = {}
 
     N = int(df.shape[1])
@@ -165,19 +138,19 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
     auto["nc"] = float(N)
     auto["nr"] = float(R)
 
-    # Completeness: total cells, incomplete cells, incomplete rows
+    # Completeness
     auto["ncl"] = float(N * R)
     na_mask = df.isna()
     auto["ic"] = float(na_mask.sum().sum())
     auto["nir"] = float(na_mask.any(axis=1).sum())
 
-    # Accuracy: syntactically invalid cells (simple heuristic: assume 0 beyond missing values)
+    # Accuracy: simple baseline
     auto["nce"] = 0.0
 
     # Currentness: detect a primary date column
     date_col = None
     for c in df.columns:
-        if "date" in str(c).lower():
+        if "date" in str(c).lower() or "kuup" in str(c).lower():
             date_col = c
             break
 
@@ -193,10 +166,9 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
             auto["ed"] = edp.isoformat()  # expiration ≈ previous end of period
             auto["ncr"] = float((dt_series != dt_series.max()).sum())
 
-    # "Today" as the current date for delay-after-expiration
     auto["cd"] = _date_type.today().isoformat()
 
-    # Publication / update dates from typical columns like ModifiedAt or UpdatedAt
+    # Publication / update dates from typical columns like ModifiedAt
     mod_col = None
     for c in df.columns:
         cl = str(c).lower()
@@ -209,20 +181,17 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
         if dtm.notna().any():
             dp = dtm.max().date()
             auto["dp"] = dp.isoformat()
-            auto["du"] = 1.0  # at least one update recorded
+            auto["du"] = 1.0
 
-    # Fallback: if we have a max_date from the time series, reuse it as publication date
     if "dp" not in auto and "max_date" in auto:
         auto["dp"] = auto["max_date"]
 
-    # Standardised columns (ns: with standards applicable, nsc: actually standardised)
+    # Standardised columns
     def _infer_ns_nsc(df2: pd.DataFrame) -> Tuple[Optional[float], Optional[float]]:
         ns = 0.0
         nsc = 0.0
-
         for col in df2.columns:
-            name = str(col)
-            lname = name.lower()
+            lname = str(col).lower()
             s = df2[col].dropna()
             if s.empty:
                 continue
@@ -230,29 +199,21 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
             is_candidate = False
             is_standardised = False
 
-            # Dates
             if "date" in lname or "kuup" in lname:
                 is_candidate = True
                 dt2 = pd.to_datetime(s, errors="coerce", utc=True)
                 if dt2.notna().mean() > 0.9:
                     is_standardised = True
-
-            # Years
-            elif "year" in lname:
+            elif "year" in lname or "aasta" in lname:
                 is_candidate = True
                 vals = pd.to_numeric(s, errors="coerce")
                 if vals.notna().mean() > 0.9 and vals.between(1900, 2100).mean() > 0.9:
                     is_standardised = True
-
-            # Official codes (EHAK, ISO, etc.)
-            elif any(tok in lname for tok in ("ehak", "iso", "code")):
+            elif any(tok in lname for tok in ("ehak", "iso", "code", "kood")):
                 is_candidate = True
                 is_standardised = True
-
-            # Geography / coverage columns without explicit code marker
             elif any(tok in lname for tok in ("country", "county", "commune", "region", "maakond", "vald", "linn")):
                 is_candidate = True
-                # treat as applicable, but not necessarily fully standardised
 
             if is_candidate:
                 ns += 1.0
@@ -269,38 +230,34 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
     if nsc is not None:
         auto["nsc"] = nsc
 
-    # Understandability: simple heuristic – treat all columns as having some metadata
-    auto["ncm"] = float(N)   # columns with metadata
-    auto["ncuf"] = float(N)  # columns in understandable & machine-readable format
+    # Understandability heuristics
+    auto["ncm"] = float(N)
+    auto["ncuf"] = float(N)
 
     # 5-star open data heuristics
     ext = (file_ext or "").lower()
-    auto["s1"] = 1.0  # available on the web (the user uploaded it)
-    auto["s2"] = 1.0  # structured data (tabular)
-    auto["s3"] = 1.0 if ext in (".csv", ".tsv", ".json", ".xml") else 0.5  # open formats
+    auto["s1"] = 1.0
+    auto["s2"] = 1.0
+    auto["s3"] = 1.0 if ext in (".csv", ".tsv", ".json", ".xml") else 0.5
     cols_lower = [str(c).lower() for c in df.columns]
     auto["s4"] = 1.0 if any(("id" in c or "uuid" in c or "uri" in c) for c in cols_lower) else 0.0
-    auto["s5"] = 0.0  # we rarely have explicit linked data information in the raw file alone
+    auto["s5"] = 0.0
 
-    # Traceability proxies: source presence & creation date
+    # Traceability proxies
     auto["s"] = 1.0 if ("dp" in auto or "sd" in auto) else 0.0
     auto["dc"] = 1.0 if "dp" in auto else 0.0
 
-    # List-of-updates flag (lu): no explicit changelog in a single CSV
     auto["lu"] = 0.0
     if "du" not in auto and "dp" in auto and "sd" in auto and auto["dp"] != auto["sd"]:
         auto["du"] = 1.0
 
-    # Aggregation accuracy: by default we assume perfect aggregation if nothing else is known
-    auto["sc"] = 1.0  # scale
+    # Aggregation accuracy defaults
+    auto["sc"] = 1.0
     auto["oav"] = 0.0
     auto["dav"] = 0.0
-    auto["e"] = 0.0   # error in aggregation
+    auto["e"] = 0.0
 
     return auto
-
-
-# --- Põhifunktsioon: compute_metrics --- #
 
 
 def compute_metrics(
@@ -310,32 +267,9 @@ def compute_metrics(
     use_llm: bool,
     hf_runner,
     file_ext: Optional[str] = None,
+    manual_metadata: Optional[Dict[str, Any]] = None,
+    trino_metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """
-    Compute all Vetrò metrics for the given dataframe.
-
-    Parameters
-    ----------
-    df : DataFrame
-        Input tabular dataset.
-    formulas_cfg : dict
-        Parsed formulas.yaml content (either full file or the vetro_methodology section).
-    prompt_defs : dict | None
-        Prompt definitions loaded from prompts.yaml["symbols"] (may be None).
-    use_llm : bool
-        Whether LLM-based symbol inference is enabled.
-    hf_runner : callable | None
-        Hugging Face runner returned by core.llm.get_hf_runner, or None.
-    file_ext : str | None
-        File extension of the uploaded dataset (e.g. ".csv") used for some heuristics.
-
-    Returns
-    -------
-    metrics_df : DataFrame
-        One row per metric with dimension, metric, metric_id, value, description and label.
-    details : dict
-        Debug information – auto-derived inputs and symbol-level inference details.
-    """
     # Accept either the full config or just vetro_methodology
     vetro = formulas_cfg.get("vetro_methodology", formulas_cfg)
 
@@ -349,20 +283,15 @@ def compute_metrics(
 
     auto_inputs = _auto_inputs(df, file_ext)
 
-    # Environment used to evaluate the expressions – everything must be numeric
-    env: Dict[str, Any] = {
-        "N": float(N),
-        "R": float(R),
-    }
+    env: Dict[str, Any] = {"N": float(N), "R": float(R)}
 
-    # Install numeric auto inputs into env (we convert dates separately below)
+    # Install numeric auto inputs into env (dates converted later)
     for k, v in auto_inputs.items():
         if k in ("sd", "edp", "ed", "cd", "dp"):
             continue
         if isinstance(v, (int, float)):
             env[k] = float(v)
 
-    # Debug details
     details: Dict[str, Any] = {
         "auto_inputs": auto_inputs,
         "symbol_values": {},
@@ -372,7 +301,7 @@ def compute_metrics(
         "llm_evidence": {},
     }
 
-    # Collect all symbols that appear in the metric "inputs" definitions
+    # Collect symbols used by metrics
     required_symbols = set()
     for dim, dim_obj in vetro.items():
         if not isinstance(dim_obj, dict):
@@ -386,83 +315,96 @@ def compute_metrics(
                         if isinstance(sym, str):
                             required_symbols.add(sym)
 
-    # First, record all auto-derived symbols for debugging
+    manual_metadata = manual_metadata or {}
+    trino_metadata = trino_metadata or {}
+
+    # --------- PRIORITY RESOLUTION: auto -> trino -> manual -> missing ----------
     for sym in sorted(required_symbols):
         if sym in auto_inputs:
             details["symbol_values"][sym] = auto_inputs[sym]
             details["symbol_source"][sym] = "auto"
-        else:
-            # We may later fill this from the LLM
-            details["symbol_values"].setdefault(sym, None)
-            details["symbol_source"].setdefault(sym, "missing")
+            env[sym] = auto_inputs[sym]
+            continue
 
-    # Optional LLM-based inference for symbols that are not auto-derived
+        if sym in trino_metadata:
+            val = trino_metadata[sym]
+            details["symbol_values"][sym] = val
+            details["symbol_source"][sym] = "trino"
+            env[sym] = val
+            continue
+
+        if sym in manual_metadata:
+            val = manual_metadata[sym]
+            details["symbol_values"][sym] = val
+            details["symbol_source"][sym] = "manual"
+            env[sym] = val
+            continue
+
+        details["symbol_values"][sym] = None
+        details["symbol_source"][sym] = "missing"
+
+    # --------- LLM fallback (only missing) ----------
     if use_llm and hf_runner is not None and prompt_defs:
-        # Build a compact, but informative, context for the model
-        context_lines = []
-        context_lines.append("Columns:")
-        context_lines.append(", ".join(str(c) for c in df.columns))
-        context_lines.append("")
-        context_lines.append("Basic column profiles:")
-        for col in df.columns:
-            s = df[col]
-            dtype = str(s.dtype)
-            missing_ratio = float(s.isna().mean())
-            sample_vals = list(s.dropna().unique()[:3])
-            context_lines.append(
-                f"- {col}: dtype={dtype}, missing={missing_ratio:.3f}, samples={sample_vals}"
-            )
-        context = "\n".join(context_lines)
+        missing_syms = [s for s in sorted(required_symbols) if details["symbol_source"].get(s) == "missing" and s in prompt_defs]
+        if missing_syms:
+            context_lines = []
+            context_lines.append("Columns:")
+            context_lines.append(", ".join(str(c) for c in df.columns))
+            context_lines.append("")
+            context_lines.append("Basic column profiles:")
+            for col in df.columns:
+                s = df[col]
+                dtype = str(s.dtype)
+                missing_ratio = float(s.isna().mean())
+                sample_vals = list(s.dropna().unique()[:3])
+                context_lines.append(
+                    f"- {col}: dtype={dtype}, missing={missing_ratio:.3f}, samples={sample_vals}"
+                )
 
-        # Local import to avoid a hard dependency at module import time
-        from core.llm import infer_symbol as _infer_symbol  # type: ignore
+            # Add metadata context too
+            context_lines.append("")
+            context_lines.append("Metadata context (trino + manual):")
+            for k, v in {**trino_metadata, **manual_metadata}.items():
+                context_lines.append(f"{k}: {v}")
 
-        for sym in sorted(required_symbols):
-            if details["symbol_source"].get(sym) != "missing":
-                continue
-            if sym not in (prompt_defs or {}):
-                continue
+            context = "\n".join(context_lines)
 
-            val, raw, conf, evid = _infer_symbol(
-                symbol=sym,
-                context=context,
-                N=N,
-                prompt_defs=prompt_defs,
-                hf_runner=hf_runner,
-                extra_values={"N": N},
-            )
-            details["llm_raw"][sym] = raw
-            details["llm_confidence"][sym] = conf
-            details["llm_evidence"][sym] = evid
+            from core.llm import infer_symbol as _infer_symbol  # local import
 
-            # If the model is unsure, treat this as a failed inference
-            if val is None or (conf is not None and conf < 0.4):
-                details["symbol_source"][sym] = "llm_fail"
-                details["symbol_values"][sym] = None
-                if sym not in env:
-                    env[sym] = 0.0
-            else:
-                details["symbol_source"][sym] = "llm"
-                details["symbol_values"][sym] = val
-                if isinstance(val, (int, float)):
-                    env[sym] = float(val)
+            for sym in missing_syms:
+                val, raw, conf, evid = _infer_symbol(
+                    symbol=sym,
+                    context=context,
+                    N=N,
+                    prompt_defs=prompt_defs,
+                    hf_runner=hf_runner,
+                    extra_values={"N": N},
+                )
+                details["llm_raw"][sym] = raw
+                details["llm_confidence"][sym] = conf
+                details["llm_evidence"][sym] = evid
+
+                if val is None or (conf is not None and conf < 0.4):
+                    details["symbol_source"][sym] = "llm_fail"
+                    details["symbol_values"][sym] = None
+                    env.setdefault(sym, 0.0)
                 else:
-                    # may be a date string; we convert below
+                    details["symbol_source"][sym] = "llm"
+                    details["symbol_values"][sym] = val
                     env[sym] = val
 
-    # Convert date-like symbols (from either auto_inputs or LLM) into numeric values
+    # Convert date-like symbols into numeric
     for sym in ("sd", "edp", "ed", "cd", "dp"):
         raw_val = details["symbol_values"].get(sym, auto_inputs.get(sym))
         num = _date_to_num(raw_val)
         if num is not None:
             env[sym] = num
 
-    # Ensure all required symbols at least exist in env to avoid KeyErrors
+    # Ensure all symbols exist
     for sym in required_symbols:
         env.setdefault(sym, 0.0)
 
     rows = []
-
     for dim, dim_obj in vetro.items():
         if not isinstance(dim_obj, dict):
             continue
@@ -476,7 +418,6 @@ def compute_metrics(
             if not inputs:
                 continue
 
-            # Optional intermediate calculations (e.g. ncl = nr * nc, or custom errors)
             interm = metric_obj.get("intermediate_calculation")
             if interm:
                 if isinstance(interm, dict) and "assign" in interm:
@@ -509,8 +450,9 @@ def compute_metrics(
             metric_id = f"{dim}.{metric_key}"
             label = label_map.get(metric_id, metric_id)
 
+            out_val: Optional[float]
             if isinstance(val, (int, float)) and not math.isnan(val):
-                out_val: Optional[float] = float(val)
+                out_val = float(val)
             else:
                 out_val = None
 

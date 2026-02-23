@@ -16,11 +16,10 @@ def run_quality_assessment(
     use_llm: bool,
     hf_model_name: str,
     file_ext: Optional[str] = None,
+    manual_metadata: Optional[Dict[str, Any]] = None,
+    trino_metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """
-    High-level helper: load YAML configs, initialise the HF model (if enabled),
-    and call compute_metrics.
-    """
+
     with open(formulas_yaml_path, "r", encoding="utf-8") as f:
         formulas_cfg = yaml.safe_load(f)
 
@@ -40,6 +39,8 @@ def run_quality_assessment(
         use_llm=use_llm,
         hf_runner=hf_runner,
         file_ext=file_ext,
+        manual_metadata=manual_metadata or {},
+        trino_metadata=trino_metadata or {},
     )
 
     return metrics_df, details

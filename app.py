@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from core.utils import make_arrow_safe
-
-
 import os
 from typing import Optional, Tuple, Dict, Any
 
@@ -10,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from core.utils import make_arrow_safe
 from core.pipeline import run_quality_assessment
 
 # --- Paths --- #
@@ -22,30 +20,119 @@ MODEL_OPTIONS = [
     "google/flan-t5-small",
 ]
 
-# --- Page config --- #
-st.set_page_config(
-    page_title="Open Data Quality Assessment",
-    layout="wide",
-)
 
+def parse_kv_metadata(text: str) -> Dict[str, Any]:
+    """
+    Parse lines like:
+      pb: 1
+      publisher: Siseministeerium
+      metadata_created: 2023-01-01
+    """
+    meta: Dict[str, Any] = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        k = k.strip()
+        v = v.strip()
+        if not k:
+            continue
+        # try numeric
+        try:
+            meta[k] = float(v)
+        except Exception:
+            meta[k] = v
+    return meta
+
+
+def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Accept either:
+      - direct symbols (pb, t, d, dc, cv, l, id, s, etc.)
+      - or common field names (publisher, title, description, metadata_created, coverage, language, identifier, source)
+    Output is a dict that can be used as symbol values.
+    """
+    out: Dict[str, Any] = {}
+
+    # keep direct symbol keys if present
+    for k, v in meta.items():
+        if k in {"pb", "t", "d", "dc", "cv", "l", "id", "s", "dp", "sd", "edp", "ed", "cd"}:
+            out[k] = v
+
+    def _present(x: Any) -> bool:
+        if x is None:
+            return False
+        if isinstance(x, float) and pd.isna(x):
+            return False
+        if isinstance(x, str) and not x.strip():
+            return False
+        return True
+
+    # map common names -> symbols (presence flags)
+    title = meta.get("title")
+    if "t" not in out and _present(title):
+        out["t"] = 1.0
+
+    desc = meta.get("description") or meta.get("notes")
+    if "d" not in out and _present(desc):
+        out["d"] = 1.0
+
+    publisher = meta.get("publisher") or meta.get("organization") or meta.get("org_name")
+    if "pb" not in out and _present(publisher):
+        out["pb"] = 1.0
+
+    created = meta.get("metadata_created") or meta.get("created") or meta.get("date_of_creation")
+    if "dc" not in out and _present(created):
+        out["dc"] = 1.0  # presence flag (Vetrò uses 0/1 for dc in your formulas.yaml)
+
+    coverage = meta.get("coverage")
+    if "cv" not in out and _present(coverage):
+        out["cv"] = 1.0
+
+    language = meta.get("language") or meta.get("lang")
+    if "l" not in out and _present(language):
+        out["l"] = 1.0
+
+    identifier = meta.get("identifier") or meta.get("dataset_id") or meta.get("id")
+    if "id" not in out and _present(identifier):
+        out["id"] = 1.0
+
+    source = meta.get("source")
+    if "s" not in out and _present(source):
+        out["s"] = 1.0
+
+    # If metadata includes explicit publication date, pass dp (date-like string)
+    dp = meta.get("date_of_publication") or meta.get("metadata_modified") or meta.get("modified")
+    if "dp" not in out and _present(dp):
+        out["dp"] = dp
+
+    return out
+
+
+# --- Page config --- #
+st.set_page_config(page_title="Open Data Quality Assessment", layout="wide")
 st.title("Open Data Quality Assessment (Vetrò et al. 2016)")
 
 st.markdown(
     """
-Upload an open data table (CSV or Excel) **or query a Trino database**, and this
-tool will approximate data quality metrics following Vetrò et al.'s framework:
-traceability, currentness, completeness, compliance, understandability and accuracy.
+Upload an open data table (CSV / Excel) **or query a Trino database**, and this tool will approximate
+data quality metrics following Vetrò et al.'s framework.
 
-The AI assistance is used only for metadata-like signals (e.g., publisher, language, coverage),
-while numeric indicators are derived directly from the data.
+Priority for inputs:
+1) auto-derived from table,
+2) Trino metadata (if provided),
+3) manual metadata textbox,
+4) LLM fallback (optional).
 """
 )
 
 # -------------------------------------------------------------------
-# 1. Data source selection: file vs Trino
+# 1. Data source selection
 # -------------------------------------------------------------------
-st.subheader("1. Choose data source")
-
+st.subheader("1) Choose data source")
 data_source = st.radio(
     "Data source",
     options=["Upload file", "Trino SQL query (beta)"],
@@ -53,7 +140,7 @@ data_source = st.radio(
     horizontal=True,
 )
 
-# --- Common settings (rows, LLM) --- #
+# --- Common settings ---
 col_settings1, col_settings2, col_settings3 = st.columns(3)
 with col_settings1:
     row_limit = st.number_input(
@@ -77,6 +164,10 @@ with col_settings3:
 # 2A. File upload UI
 # -------------------------------------------------------------------
 uploaded_file = None
+trino_host = trino_port = trino_catalog = trino_schema = trino_user = trino_password = ""
+trino_sql = ""
+trino_meta_sql = ""
+
 if data_source == "Upload file":
     uploaded_file = st.file_uploader(
         "Upload a CSV or Excel file",
@@ -86,18 +177,14 @@ if data_source == "Upload file":
 # -------------------------------------------------------------------
 # 2B. Trino DB UI
 # -------------------------------------------------------------------
-trino_host = trino_port = trino_catalog = trino_schema = trino_user = trino_password = ""
-trino_sql = ""
-
 if data_source == "Trino SQL query (beta)":
     st.markdown(
         """
-Connect to a Trino endpoint and run a SQL query. The result table will be used as
-input for the quality assessment.
-
-**Note:** Credentials are used only in this session and are not stored by the app.
+Connect to a Trino endpoint and run a SQL query. The result table will be used as input.
+Optionally, you can also run a **metadata query** (one-row result) to provide portal metadata.
 """
     )
+
     col_conn1, col_conn2 = st.columns(2)
     with col_conn1:
         trino_host = st.text_input("Trino host", value="trino.avaandmeait.ee")
@@ -113,36 +200,71 @@ input for the quality assessment.
         trino_password = st.text_input("Trino password", value="", type="password")
 
     trino_sql = st.text_area(
-        "SQL query",
-        height=180,
+        "Data SQL query",
+        height=160,
         placeholder="SELECT * FROM some_table LIMIT 100000",
-        help="Use LIMIT in your query if the table is very large.",
+        help="Use LIMIT if the table is very large.",
     )
 
-    st.caption(
-        "JDBC-style URL (for reference): "
-        "jdbc:trino://trino.avaandmeait.ee:443?SSL=true&SSLVerification=NONE"
+    trino_meta_sql = st.text_area(
+        "Metadata SQL query (optional, should return 1 row)",
+        height=160,
+        placeholder=(
+            "Example:\n"
+            "SELECT\n"
+            "  title,\n"
+            "  notes AS description,\n"
+            "  metadata_created,\n"
+            "  metadata_modified,\n"
+            "  organization.name AS publisher\n"
+            "FROM landing.avaandmete_portaal.dataset_metadata\n"
+            "WHERE lower(title) LIKE '%abiel%'\n"
+            "LIMIT 1"
+        ),
+        help="If provided, this should return 1 row with columns like title/description/publisher/metadata_created etc.",
     )
+
+# -------------------------------------------------------------------
+# 2C. Manual metadata textbox (both modes)
+# -------------------------------------------------------------------
+st.subheader("2) Optional manual metadata")
+manual_meta_text = st.text_area(
+    "Manual metadata (key: value per line). Used if auto/Trino doesn't provide it.",
+    height=140,
+    help=(
+        "You can provide either symbols or common names.\n\n"
+        "Symbols example:\n"
+        "pb: 1\n"
+        "dc: 1\n"
+        "t: 1\n\n"
+        "Common names example:\n"
+        "publisher: Siseministeerium\n"
+        "title: Abielud maakonna ja aasta järgi\n"
+        "metadata_created: 2018-01-15\n"
+    ),
+)
 
 # -------------------------------------------------------------------
 # 3. Run button
 # -------------------------------------------------------------------
-run_btn = st.button(
-    "Run assessment",
-    type="primary",
-)
+run_btn = st.button("Run assessment", type="primary")
 
 # -------------------------------------------------------------------
-# 4. Main execution logic: load DataFrame, then compute metrics
+# 4. Main logic
 # -------------------------------------------------------------------
 if run_btn:
     try:
         df: Optional[pd.DataFrame] = None
         ext: Optional[str] = None
+        trino_metadata: Dict[str, Any] = {}
+        manual_metadata_raw = parse_kv_metadata(manual_meta_text)
+        manual_metadata = normalize_metadata_to_symbols(manual_metadata_raw)
 
-        # ------------------------------------------------------------
-        # A) File path
-        # ------------------------------------------------------------
+        conn = None
+
+        # -----------------------
+        # A) File mode
+        # -----------------------
         if data_source == "Upload file":
             if uploaded_file is None:
                 st.error("Please upload a CSV/Excel file first.")
@@ -151,7 +273,6 @@ if run_btn:
             name = uploaded_file.name
             ext = os.path.splitext(name)[1].lower()
 
-            # Load dataframe
             if ext in [".csv", ".tsv", ".txt"]:
                 df = pd.read_csv(uploaded_file, sep=None, engine="python")
             elif ext in [".xls", ".xlsx"]:
@@ -163,12 +284,12 @@ if run_btn:
             if row_limit and row_limit > 0:
                 df = df.head(row_limit)
 
-        # ------------------------------------------------------------
-        # B) Trino path
-        # ------------------------------------------------------------
-        elif data_source == "Trino SQL query (beta)":
+        # -----------------------
+        # B) Trino mode
+        # -----------------------
+        else:
             if not trino_sql.strip():
-                st.error("Please enter a SQL query for Trino.")
+                st.error("Please enter a Data SQL query for Trino.")
                 st.stop()
             if not trino_host.strip():
                 st.error("Please enter Trino host.")
@@ -178,18 +299,15 @@ if run_btn:
                 st.stop()
 
             try:
-                import trino
                 from trino.dbapi import connect as trino_connect
                 from trino.auth import BasicAuthentication
             except Exception as e:
                 st.error(
                     "The 'trino' Python package is required for DB mode. "
-                    "Please ensure it is installed.\n\n"
                     f"Import error: {e}"
                 )
                 st.stop()
 
-            # Build connection
             conn_kwargs: Dict[str, Any] = {
                 "host": trino_host.strip(),
                 "port": int(trino_port),
@@ -200,43 +318,46 @@ if run_btn:
                 conn_kwargs["catalog"] = trino_catalog.strip()
             if trino_schema.strip():
                 conn_kwargs["schema"] = trino_schema.strip()
-
-            # Auth: Basic if password given, otherwise no auth object
             if trino_password:
-                conn_kwargs["auth"] = BasicAuthentication(
-                    trino_user.strip(), trino_password
-                )
+                conn_kwargs["auth"] = BasicAuthentication(trino_user.strip(), trino_password)
 
             try:
                 conn = trino_connect(**conn_kwargs)
                 df = pd.read_sql(trino_sql, conn)
                 ext = ".sql"
             except Exception as e:
-                st.error(f"Failed to execute Trino query: {e}")
+                st.error(f"Failed to execute Trino data query: {e}")
                 st.stop()
 
-        # ------------------------------------------------------------
-        # Sanity check: df must exist
-        # ------------------------------------------------------------
+            # Optional metadata query
+            if trino_meta_sql.strip():
+                try:
+                    meta_df = pd.read_sql(trino_meta_sql, conn)
+                    if not meta_df.empty:
+                        meta_row = meta_df.iloc[0].to_dict()
+                        trino_metadata_raw = {k: meta_row.get(k) for k in meta_row.keys()}
+                        trino_metadata = normalize_metadata_to_symbols(trino_metadata_raw)
+                except Exception as e:
+                    st.warning(f"Metadata query failed (continuing without it): {e}")
+
+        # -----------------------
+        # Sanity check
+        # -----------------------
         if df is None:
             st.error("No data could be loaded from the selected data source.")
             st.stop()
 
-        # ------------------------------------------------------------
-        # Preview
-        # ------------------------------------------------------------
         df = make_arrow_safe(df)
+
+        # Preview
         st.subheader("Preview of the dataset")
         st.dataframe(df.head(20), width="stretch")
         st.caption(f"{df.shape[0]} rows × {df.shape[1]} columns used for metrics.")
 
-        # If extension is still None (should not happen), fall back
         if ext is None:
             ext = ".table"
 
-        # ------------------------------------------------------------
-        # Compute metrics
-        # ------------------------------------------------------------
+        # Compute
         with st.spinner("Computing quality metrics..."):
             metrics_df, details = run_quality_assessment(
                 df=df,
@@ -245,10 +366,11 @@ if run_btn:
                 use_llm=use_llm,
                 hf_model_name=hf_model_name,
                 file_ext=ext,
+                manual_metadata=manual_metadata,
+                trino_metadata=trino_metadata,
             )
 
         st.subheader("Quality metrics")
-
         if metrics_df.empty or metrics_df["value"].dropna().empty:
             st.info("No metrics could be computed.")
         else:
@@ -271,18 +393,21 @@ if run_btn:
             st.plotly_chart(fig, width="stretch")
 
             st.dataframe(
-                metrics_non_null[
-                    ["dimension", "metric_label", "value", "metric_id"]
-                ].sort_values(["dimension", "metric_id"]),
+                metrics_non_null[["dimension", "metric_label", "value", "metric_id"]]
+                .sort_values(["dimension", "metric_id"]),
                 width="stretch",
             )
 
-        # ------------------------------------------------------------
-        # Debug / explanations
-        # ------------------------------------------------------------
-        with st.expander("Debug: auto-derived inputs and AI inferences"):
+        # Debug
+        with st.expander("Debug: auto-derived inputs and AI/metadata inferences"):
             st.markdown("**Auto-derived inputs (from the table only):**")
             st.json(details.get("auto_inputs", {}))
+
+            st.markdown("**Trino metadata (normalised to symbols):**")
+            st.json(trino_metadata)
+
+            st.markdown("**Manual metadata (normalised to symbols):**")
+            st.json(manual_metadata)
 
             symbol_values = details.get("symbol_values", {})
             if not symbol_values:
