@@ -83,8 +83,9 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     publisher = meta.get("publisher") or meta.get("organization") or meta.get("org_name")
     if "pb" not in out and _present(publisher):
         out["pb"] = 1.0
+        out["s"] = 1.0 
 
-    created = meta.get("metadata_created") or meta.get("created") or meta.get("date_of_creation")
+    created = meta.get("metadata_created") or meta.get("created") or meta.get("date_of_creation") or meta.get("issued")
     if "dc" not in out and _present(created):
         out["dc"] = 1.0  # presence flag (Vetrò uses 0/1 for dc in your formulas.yaml)
 
