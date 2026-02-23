@@ -1,94 +1,119 @@
 meta:
-  name: Vetrò open data quality symbol prompts (variant B)
-  version: "0.2-B"
+  name: Vetrò metadata reasoning prompts (LLM-based)
+  version: "1.0-A"
   style: "three-line explicit answers"
   notes:
-    - All answers MUST be in exactly three lines, in this order:
-    - "answer: <value>"
-    - "confidence: <number between 0 and 1>"
-    - "evidence: <short free-text explanation>"
+    - All answers MUST be in exactly three lines
+    - answer: <value>
+    - confidence: <0-1>
+    - evidence: <short explanation mentioning field name>
 
 symbols:
-  c:
-    type: binary
-    description: "Does the dataset have a high-level category / theme field in its metadata?"
-    prompt: |
-      You help assess open data quality.
-      Question: Based on the context, is it reasonable to assume that the dataset has a CATEGORY or THEME field in its portal metadata (for example, health, transport, environment)?
-      Treat this as present if it is an official statistical or government dataset that would normally be categorised.
-      Answer STRICTLY in three lines:
-      answer: 1 if category/theme metadata is clearly present or safely inferable, otherwise 0
-      confidence: a number between 0 and 1 (use higher values only if the evidence is strong)
-      evidence: a short justification mentioning the clues you used
 
-  t:
+  dc:
     type: binary
-    description: "Is there a clear human-readable title for the dataset?"
+    description: "Does metadata contain a creation/issued date?"
     prompt: |
-      You help assess open data quality.
-      Question: Does the dataset have a clear, human-readable TITLE (for example, 'Influenza vaccinations by location and age group')?
-      Assume that if you can write a precise title from the context, then title metadata exists.
-      Answer STRICTLY in three lines:
-      answer: 1 if a clear title is present or clearly inferable, otherwise 0
-      confidence: a number between 0 and 1
-      evidence: a short justification mentioning the clues you used
+      You are analysing a structured metadata JSON record from an open data portal.
 
-  d:
-    type: binary
-    description: "Is there a description text explaining the dataset contents?"
-    prompt: |
-      You help assess open data quality.
-      Question: Is there a DESCRIPTION field explaining what the dataset contains and how to interpret it?
-      If the context is rich enough that a portal would normally include a paragraph of description, you may answer 1.
+      Question:
+      Does the metadata contain a CREATION or ISSUED date?
+
+      Look for fields such as:
+      - issued
+      - created
+      - publication date
+
       Answer STRICTLY in three lines:
-      answer: 1 if a description is likely present, otherwise 0
-      confidence: a number between 0 and 1
-      evidence: a short justification mentioning the clues you used
+      answer: 1 if such a date exists, otherwise 0
+      confidence: number between 0 and 1
+      evidence: mention the exact field name
+
+  dp:
+    type: binary
+    description: "Does metadata contain publication or modification date?"
+    prompt: |
+      You are analysing metadata JSON.
+
+      Question:
+      Does the metadata contain a PUBLICATION or MODIFICATION date?
+
+      Look for:
+      - modificationdate
+      - releasedate
+      - updated
+      - modified
+
+      Answer STRICTLY in three lines:
+      answer: 1 if present, otherwise 0
+      confidence: number between 0 and 1
+      evidence: mention the field name
+
+  sd:
+    type: date
+    description: "Start date of temporal coverage"
+    prompt: |
+      You are analysing metadata JSON.
+
+      The metadata may contain a field like 'temporalcoverage'
+      (example: "2010–2023").
+
+      Extract the START YEAR of the coverage period.
+
+      Return STRICTLY:
+      answer: YYYY-01-01 if extractable, otherwise 0
+      confidence: number between 0 and 1
+      evidence: mention the coverage string
+
+  edp:
+    type: date
+    description: "End date of temporal coverage"
+    prompt: |
+      You are analysing metadata JSON.
+
+      Extract the END YEAR of the coverage period from fields such as:
+      - temporalcoverage
+
+      Return STRICTLY:
+      answer: YYYY-12-31 if extractable, otherwise 0
+      confidence: number between 0 and 1
+      evidence: mention the coverage string
 
   id:
     type: binary
-    description: "Is there a stable identifier for the dataset in the portal metadata?"
+    description: "Is there a stable identifier?"
     prompt: |
-      You help assess open data quality.
-      Question: Does the dataset have a STABLE IDENTIFIER in its portal (for example, a UUID, short code, or permanent slug)?
-      If any permanent identifier is visible or strongly implied, treat this as present.
-      Answer STRICTLY in three lines:
-      answer: 1 if a stable identifier exists or is strongly implied, otherwise 0
-      confidence: a number between 0 and 1
-      evidence: a short justification mentioning the clues you used
+      Does the metadata contain a stable dataset identifier?
 
-  pb:
-    type: binary
-    description: "Is the publisher/maintainer of the dataset clearly identified?"
-    prompt: |
-      You help assess open data quality.
-      Question: Is it clear which ORGANISATION publishes or maintains the dataset (for example, a ministry or statistical office)?
-      Consider health, statistics or government agencies as plausible publishers when the context strongly suggests them.
+      Look for:
+      - datasetidentifier
+      - slug
+      - id
+
       Answer STRICTLY in three lines:
-      answer: 1 if the publisher is explicitly mentioned or very clearly inferable, otherwise 0
-      confidence: a number between 0 and 1
-      evidence: a short justification mentioning the clues you used
+      answer: 1 if present, otherwise 0
+      confidence: number between 0 and 1
+      evidence: mention the identifier field
 
   cv:
     type: binary
-    description: "Is there clear coverage metadata (geographical, temporal or population)?"
+    description: "Is coverage metadata present?"
     prompt: |
-      You help assess open data quality.
-      Question: Does the dataset metadata clearly indicate coverage, such as country, region, time period or population group?
-      If the context explicitly lists geography, dates or population groups, you may answer 1.
+      Does the metadata contain coverage information such as
+      temporalcoverage, geographic coverage, or population coverage?
+
       Answer STRICTLY in three lines:
-      answer: 1 if coverage metadata is clearly present or strongly implied, otherwise 0
-      confidence: a number between 0 and 1
-      evidence: a short justification mentioning the clues you used
+      answer: 1 if present, otherwise 0
+      confidence: number between 0 and 1
+      evidence: mention the coverage field
 
   l:
     type: binary
-    description: "Is the language of the dataset and metadata clearly indicated?"
+    description: "Is language clear?"
     prompt: |
-      You help assess open data quality.
-      Question: Is the LANGUAGE of the dataset and its metadata clear (for example, English or Estonian)?
-      If all column names and terms are clearly in a single language, treat this as present.
+      Is the language of metadata clearly identifiable from fields such as title, description, or titleen?
+
       Answer STRICTLY in three lines:
-      answer: 1 if the language is obvious or explicitly stated, otherwise 0
-      confidence: a number between 0 and 1
-      evidence: a short justification mentioning the clues you used
+      answer: 1 if language is clear, otherwise 0
+      confidence: number between 0 and 1
+      evidence: mention clues used

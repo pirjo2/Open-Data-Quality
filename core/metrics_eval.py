@@ -5,6 +5,7 @@ from typing import Any, Dict, Tuple, Optional
 import math
 import re
 from datetime import date as _date_type
+import json
 
 import pandas as pd
 
@@ -145,7 +146,7 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
     auto["nir"] = float(na_mask.any(axis=1).sum())
 
     # Accuracy: simple baseline
-    auto["nce"] = 0.0
+    auto["nce"] = None
 
     # Currentness: detect a primary date column
     date_col = None
@@ -241,24 +242,23 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
     auto["s3"] = 1.0 if ext in (".csv", ".tsv", ".json", ".xml") else 0.5
     cols_lower = [str(c).lower() for c in df.columns]
     auto["s4"] = 1.0 if any(("id" in c or "uuid" in c or "uri" in c) for c in cols_lower) else 0.0
-    auto["s5"] = 0.0
+    auto["s5"] = None
 
     # Traceability proxies
-    auto["s"] = 1.0 if ("dp" in auto or "sd" in auto) else 0.0
-    auto["dc"] = 1.0 if "dp" in auto else 0.0
+    auto["s"] = 1.0 if ("dp" in auto or "sd" in auto) else None
+    auto["dc"] = 1.0 if "dp" in auto else None
 
-    auto["lu"] = 0.0
+    auto["lu"] = None
     if "du" not in auto and "dp" in auto and "sd" in auto and auto["dp"] != auto["sd"]:
         auto["du"] = 1.0
 
     # Aggregation accuracy defaults
     auto["sc"] = 1.0
-    auto["oav"] = 0.0
-    auto["dav"] = 0.0
-    auto["e"] = 0.0
+    auto["oav"] = None
+    auto["dav"] = None
+    auto["e"] = None
 
     return auto
-
 
 def compute_metrics(
     df: pd.DataFrame,
@@ -269,6 +269,7 @@ def compute_metrics(
     file_ext: Optional[str] = None,
     manual_metadata: Optional[Dict[str, Any]] = None,
     trino_metadata: Optional[Dict[str, Any]] = None,
+    trino_metadata_raw: Optional[Dict[str, Any]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     # Accept either the full config or just vetro_methodology
     vetro = formulas_cfg.get("vetro_methodology", formulas_cfg)
@@ -371,7 +372,7 @@ def compute_metrics(
             if (
                 sym in refinable_symbols
                 and source == "auto"
-                and (val is None or val == 0 or val == 0.0)
+                and val is None
             ):
                 missing_syms.append(sym)
 
@@ -392,11 +393,18 @@ def compute_metrics(
                 context_lines.append(
                     f"- {col}: dtype={dtype}, missing={missing_ratio:.3f}, samples={sample_vals}"
                 )
-
             context_lines.append("")
-            context_lines.append("Metadata context (trino + manual):")
-            for k, v in {**trino_metadata, **manual_metadata}.items():
-                context_lines.append(f"{k}: {v}")
+            context_lines.append("Raw metadata record from portal (JSON):")
+            context_lines.append(
+                json.dumps(trino_metadata_raw, indent=2, default=str)
+            )
+
+            if manual_metadata:
+                context_lines.append("")
+                context_lines.append("Manual metadata overrides:")
+                context_lines.append(
+                    json.dumps(manual_metadata, indent=2, default=str)
+                )
 
             context = "\n".join(context_lines)
 

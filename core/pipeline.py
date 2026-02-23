@@ -18,6 +18,7 @@ def run_quality_assessment(
     file_ext: Optional[str] = None,
     manual_metadata: Optional[Dict[str, Any]] = None,
     trino_metadata: Optional[Dict[str, Any]] = None,
+    trino_metadata_raw: Optional[Dict[str, Any]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
 
     with open(formulas_yaml_path, "r", encoding="utf-8") as f:
@@ -41,6 +42,7 @@ def run_quality_assessment(
         file_ext=file_ext,
         manual_metadata=manual_metadata or {},
         trino_metadata=trino_metadata or {},
+        trino_metadata_raw=trino_metadata_raw or {},
     )
 
     return metrics_df, details

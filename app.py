@@ -175,6 +175,7 @@ uploaded_file = None
 trino_host = trino_port = trino_catalog = trino_schema = trino_user = trino_password = ""
 trino_sql = ""
 trino_meta_sql = ""
+trino_metadata_raw: Dict[str, Any] = {}
 
 if data_source == "Upload file":
     uploaded_file = st.file_uploader(
@@ -343,6 +344,7 @@ if run_btn:
                     meta_df = pd.read_sql(trino_meta_sql, conn)
                     if not meta_df.empty:
                         meta_row = meta_df.iloc[0].to_dict()
+                        trino_metadata_raw = meta_row if not meta_df.empty else {}
                         trino_metadata_raw = {k: meta_row.get(k) for k in meta_row.keys()}
                         trino_metadata = normalize_metadata_to_symbols(trino_metadata_raw)
                 except Exception as e:
@@ -376,6 +378,7 @@ if run_btn:
                 file_ext=ext,
                 manual_metadata=manual_metadata,
                 trino_metadata=trino_metadata,
+                trino_metadata_raw=trino_metadata_raw,
             )
 
         metrics_df["value"] = pd.to_numeric(metrics_df["value"], errors="coerce")
@@ -436,7 +439,15 @@ if run_btn:
                             "llm_evidence": evid.get(sym, ""),
                         }
                     )
-                st.dataframe(pd.DataFrame(rows), width="stretch")
+
+                debug_df = pd.DataFrame(rows)
+
+                # Fix Arrow dtype issues
+                debug_df["value"] = debug_df["value"].astype(str)
+                debug_df["llm_confidence"] = pd.to_numeric(debug_df["llm_confidence"], errors="coerce")
+                debug_df["llm_evidence"] = debug_df["llm_evidence"].astype(str)
+
+                st.dataframe(debug_df, width="stretch")
 
     except Exception as e:
         st.exception(e)
