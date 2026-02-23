@@ -85,9 +85,16 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
         out["pb"] = 1.0
         out["s"] = 1.0 
 
-    created = meta.get("metadata_created") or meta.get("created") or meta.get("date_of_creation") or meta.get("issued")
-    if "dc" not in out and _present(created):
-        out["dc"] = 1.0  # presence flag (Vetrò uses 0/1 for dc in your formulas.yaml)
+    # --- Date of creation mapping ---
+    created = (
+        meta.get("metadata_created")
+        or meta.get("issued")
+        or meta.get("created")
+        or meta.get("date_of_creation")
+    )
+
+    if _present(created):
+        out["dc"] = 1.0
 
     coverage = meta.get("coverage")
     if "cv" not in out and _present(coverage):
