@@ -371,6 +371,7 @@ if run_btn:
                 trino_metadata=trino_metadata,
             )
 
+        metrics_df["value"] = pd.to_numeric(metrics_df["value"], errors="coerce")
         st.subheader("Quality metrics")
         if metrics_df.empty or metrics_df["value"].dropna().empty:
             st.info("No metrics could be computed.")

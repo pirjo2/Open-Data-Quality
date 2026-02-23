@@ -320,7 +320,8 @@ def compute_metrics(
 
     # --------- PRIORITY RESOLUTION: auto -> trino -> manual -> missing ----------
     for sym in sorted(required_symbols):
-        if sym in auto_inputs:
+        # Special case: traceability symbols should prefer metadata over auto
+        if sym in auto_inputs and sym not in {"s", "dc"}:
             details["symbol_values"][sym] = auto_inputs[sym]
             details["symbol_source"][sym] = "auto"
             env[sym] = auto_inputs[sym]
