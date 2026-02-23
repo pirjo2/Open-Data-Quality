@@ -344,14 +344,45 @@ def compute_metrics(
         details["symbol_values"][sym] = None
         details["symbol_source"][sym] = "missing"
 
-    # --------- LLM fallback (only missing) ----------
+    # --------- LLM fallback (missing + auto=0 refinement) ----------
     if use_llm and hf_runner is not None and prompt_defs:
-        missing_syms = [s for s in sorted(required_symbols) if details["symbol_source"].get(s) == "missing" and s in prompt_defs]
+
+        refinable_symbols = {
+            "s", "dc", "dp", "du", "sd", "edp", "ed",
+            "cv", "l", "id", "c"
+        }
+
+        missing_syms = []
+
+        # Collect symbols first
+        for sym in sorted(required_symbols):
+            if sym not in prompt_defs:
+                continue
+
+            source = details["symbol_source"].get(sym)
+            val = details["symbol_values"].get(sym)
+
+            # Case 1: missing
+            if source == "missing":
+                missing_syms.append(sym)
+                continue
+
+            # Case 2: auto=0 and refinable
+            if (
+                sym in refinable_symbols
+                and source == "auto"
+                and (val is None or val == 0 or val == 0.0)
+            ):
+                missing_syms.append(sym)
+
+        # Only now build context
         if missing_syms:
+
             context_lines = []
             context_lines.append("Columns:")
             context_lines.append(", ".join(str(c) for c in df.columns))
             context_lines.append("")
+
             context_lines.append("Basic column profiles:")
             for col in df.columns:
                 s = df[col]
@@ -362,7 +393,6 @@ def compute_metrics(
                     f"- {col}: dtype={dtype}, missing={missing_ratio:.3f}, samples={sample_vals}"
                 )
 
-            # Add metadata context too
             context_lines.append("")
             context_lines.append("Metadata context (trino + manual):")
             for k, v in {**trino_metadata, **manual_metadata}.items():
@@ -370,8 +400,9 @@ def compute_metrics(
 
             context = "\n".join(context_lines)
 
-            from core.llm import infer_symbol as _infer_symbol  # local import
+            from core.llm import infer_symbol as _infer_symbol
 
+            # Then call LLM
             for sym in missing_syms:
                 val, raw, conf, evid = _infer_symbol(
                     symbol=sym,
@@ -381,19 +412,23 @@ def compute_metrics(
                     hf_runner=hf_runner,
                     extra_values={"N": N},
                 )
+
                 details["llm_raw"][sym] = raw
                 details["llm_confidence"][sym] = conf
                 details["llm_evidence"][sym] = evid
 
+                # Do NOT override trino or manual
+                if details["symbol_source"].get(sym) in {"trino", "manual"}:
+                    continue
+
                 if val is None or (conf is not None and conf < 0.4):
                     details["symbol_source"][sym] = "llm_fail"
-                    details["symbol_values"][sym] = None
                     env.setdefault(sym, 0.0)
                 else:
                     details["symbol_source"][sym] = "llm"
                     details["symbol_values"][sym] = val
                     env[sym] = val
-
+                    
     # Convert date-like symbols into numeric
     for sym in ("sd", "edp", "ed", "cd", "dp"):
         raw_val = details["symbol_values"].get(sym, auto_inputs.get(sym))
