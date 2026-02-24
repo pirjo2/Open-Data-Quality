@@ -1,4 +1,4 @@
-# Open Data Quality (Vetrò 2016) — YAML-driven + optional Hugging Face LLM
+# Open Data Quality (Vetrò 2016) - YAML-driven + optional Hugging Face LLM
 
 ## Files
 - `configs/formulas.yaml` - Vetrò methodology (dimensions, metrics, formulas)
