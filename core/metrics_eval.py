@@ -249,12 +249,6 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
     auto["dc"] = 1.0 if "dp" in auto else None
 
     auto["lu"] = None
-    # --- Deterministic modification date handling ---
-    mod_date = trino_metadata_raw.get("modificationdate")
-
-    if mod_date:
-        details["symbol_values"]["du"] = 1.0
-        details["symbol_source"]["du"] = "parser"
 
     # Aggregation accuracy defaults
     auto["sc"] = 1.0
@@ -322,8 +316,14 @@ def compute_metrics(
 
     manual_metadata = manual_metadata or {}
     trino_metadata = trino_metadata or {}
+    trino_metadata_raw = trino_metadata_raw or {}
 
     cov = trino_metadata_raw.get("temporalcoverage")
+
+    mod_date = trino_metadata_raw.get("modificationdate")
+    if mod_date:
+        details["symbol_values"]["du"] = 1.0
+        details["symbol_source"]["du"] = "parser"
 
     if isinstance(cov, str):
         years = re.findall(r"\d{4}", cov)
