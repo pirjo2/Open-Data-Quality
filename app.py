@@ -268,6 +268,8 @@ if run_btn:
         trino_metadata: Dict[str, Any] = {}
         manual_metadata_raw = parse_kv_metadata(manual_meta_text)
         manual_metadata = normalize_metadata_to_symbols(manual_metadata_raw)
+        if not trino_metadata_raw:
+            trino_metadata_raw = manual_metadata_raw
 
         conn = None
 
@@ -344,8 +346,7 @@ if run_btn:
                     meta_df = pd.read_sql(trino_meta_sql, conn)
                     if not meta_df.empty:
                         meta_row = meta_df.iloc[0].to_dict()
-                        trino_metadata_raw = meta_row if not meta_df.empty else {}
-                        trino_metadata_raw = {k: meta_row.get(k) for k in meta_row.keys()}
+                        trino_metadata_raw = meta_row
                         trino_metadata = normalize_metadata_to_symbols(trino_metadata_raw)
                 except Exception as e:
                     st.warning(f"Metadata query failed (continuing without it): {e}")
@@ -361,6 +362,12 @@ if run_btn:
 
         # Preview
         st.subheader("Preview of the dataset")
+        # Fix nested object columns for Arrow compatibility
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].apply(
+                    lambda x: str(x) if isinstance(x, (dict, list, tuple)) else x
+                )
         st.dataframe(df.head(20), width="stretch")
         st.caption(f"{df.shape[0]} rows × {df.shape[1]} columns used for metrics.")
 
@@ -377,11 +384,13 @@ if run_btn:
                 hf_model_name=hf_model_name,
                 file_ext=ext,
                 manual_metadata=manual_metadata,
-                trino_metadata=trino_metadata,
+                trino_metadata={},            
                 trino_metadata_raw=trino_metadata_raw,
-            )
+)
 
-        metrics_df["value"] = pd.to_numeric(metrics_df["value"], errors="coerce")
+        metrics_df["value"] = metrics_df["value"].apply(
+            lambda x: float(x) if isinstance(x, (int, float)) else None
+        )
         st.subheader("Quality metrics")
         if metrics_df.empty or metrics_df["value"].dropna().empty:
             st.info("No metrics could be computed.")

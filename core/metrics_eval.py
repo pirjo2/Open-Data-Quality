@@ -249,8 +249,12 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
     auto["dc"] = 1.0 if "dp" in auto else None
 
     auto["lu"] = None
-    if "du" not in auto and "dp" in auto and "sd" in auto and auto["dp"] != auto["sd"]:
-        auto["du"] = 1.0
+    # --- Deterministic modification date handling ---
+    mod_date = trino_metadata_raw.get("modificationdate")
+
+    if mod_date:
+        details["symbol_values"]["du"] = 1.0
+        details["symbol_source"]["du"] = "parser"
 
     # Aggregation accuracy defaults
     auto["sc"] = 1.0
@@ -318,6 +322,20 @@ def compute_metrics(
 
     manual_metadata = manual_metadata or {}
     trino_metadata = trino_metadata or {}
+
+    cov = trino_metadata_raw.get("temporalcoverage")
+
+    if isinstance(cov, str):
+        years = re.findall(r"\d{4}", cov)
+        if len(years) >= 2:
+            sd_val = f"{years[0]}-01-01"
+            edp_val = f"{years[1]}-12-31"
+
+            details["symbol_values"]["sd"] = sd_val
+            details["symbol_source"]["sd"] = "parser"
+
+            details["symbol_values"]["edp"] = edp_val
+            details["symbol_source"]["edp"] = "parser"
 
     # --------- PRIORITY RESOLUTION: auto -> trino -> manual -> missing ----------
     for sym in sorted(required_symbols):
