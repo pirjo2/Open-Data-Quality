@@ -339,6 +339,8 @@ def compute_metrics(
 
     # --------- PRIORITY RESOLUTION: auto -> trino -> manual -> missing ----------
     for sym in sorted(required_symbols):
+        if details["symbol_source"].get(sym) == "parser":
+            continue
         # Auto only if NOT traceability core symbols
         if sym in auto_inputs and sym not in {"s", "dc"}:
             details["symbol_values"][sym] = auto_inputs[sym]

@@ -269,8 +269,6 @@ if run_btn:
         manual_metadata_raw = parse_kv_metadata(manual_meta_text)
         manual_metadata = normalize_metadata_to_symbols(manual_metadata_raw)
         trino_metadata_raw: Dict[str, Any] = {}
-        if not trino_metadata_raw:
-            trino_metadata_raw = manual_metadata_raw
 
         conn = None
 
@@ -351,6 +349,8 @@ if run_btn:
                         trino_metadata = normalize_metadata_to_symbols(trino_metadata_raw)
                 except Exception as e:
                     st.warning(f"Metadata query failed (continuing without it): {e}")
+            if not trino_metadata_raw:
+                trino_metadata_raw = manual_metadata_raw
 
         # -----------------------
         # Sanity check
