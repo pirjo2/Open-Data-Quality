@@ -1,0 +1,4 @@
+information_availability_date: 2025-10-01
+publication_date: 2026-02-21
+dataset_period: week
+period_days: 7

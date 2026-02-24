@@ -1,0 +1,5 @@
+id,date_iso,quantity,active,country_code
+1,2026-02-01,1,True,EE
+2,2026-02-02,10,False,LV
+3,2026-02-03,3,True,LT
+4,2026-02-04,7,True,FI

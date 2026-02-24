@@ -1,0 +1,4 @@
+previous_version_expiration_date: 2026-01-01
+publication_date: 2026-02-18
+dataset_period: week
+period_days: 7

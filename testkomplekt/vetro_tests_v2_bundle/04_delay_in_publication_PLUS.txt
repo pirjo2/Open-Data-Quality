@@ -1,0 +1,4 @@
+information_availability_date: 2026-02-20
+publication_date: 2026-02-21
+dataset_period: month
+period_days: 30

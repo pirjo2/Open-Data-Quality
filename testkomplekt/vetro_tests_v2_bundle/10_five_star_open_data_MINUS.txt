@@ -1,0 +1,7 @@
+on_web: false
+open_license: false
+machine_readable: false
+non_proprietary_format: false
+uses_uris: false
+linked_open_data: false
+expected_star_level: 0

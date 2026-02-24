@@ -1,0 +1,5 @@
+column,description
+id,Row identifier
+amount_eur,Amount in euros (EUR)
+date_iso,Date in ISO 8601 format (YYYY-MM-DD)
+country_code,Country code ISO 3166-1 alpha-2

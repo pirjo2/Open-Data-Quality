@@ -1,0 +1,2 @@
+source: Statistics Estonia API
+date_of_creation: 2026-01-10

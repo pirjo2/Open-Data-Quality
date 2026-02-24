@@ -1,0 +1,9 @@
+source: https://example.org/dataset/egms-plus
+date_of_creation: 2026-01-10
+category: transport
+title: Public transport usage (synthetic)
+description: Synthetic dataset for eGMS compliance testing.
+identifier: SYN-PT-2026-01
+publisher: Example Publisher
+coverage: Estonia
+language: et

@@ -1,0 +1,9 @@
+source:
+date_of_creation:
+category:
+title:
+description:
+identifier:
+publisher:
+coverage:
+language:

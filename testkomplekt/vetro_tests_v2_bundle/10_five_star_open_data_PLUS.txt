@@ -1,0 +1,7 @@
+on_web: true
+open_license: true
+machine_readable: true
+non_proprietary_format: true
+uses_uris: true
+linked_open_data: true
+expected_star_level: 5

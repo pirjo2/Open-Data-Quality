@@ -1,0 +1,5 @@
+id,date_iso,quantity,active,country_code
+one,01/02/26,"1,000",y,Estonia
+two,02-03-26,ten,n/a,Latvia
+three,Feb 4 26,~3,maybe,Lithuania
+four,2026.02.05,seven,,Finland
