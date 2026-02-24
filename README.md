@@ -14,6 +14,4 @@ streamlit run app.py
 ```
 
 ## Deploy options
-- Streamlit Community Cloud
-- Hugging Face Spaces (Streamlit)
-- Render / Railway
+- https://avaandmete-kvaliteet.streamlit.app/ 
