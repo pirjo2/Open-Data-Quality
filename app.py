@@ -318,6 +318,21 @@ manual_meta_text = st.text_area(
 # -------------------------------------------------------------------
 run_btn = st.button("Run assessment", type="primary")
 
+if st.button("Test OpenAI connection"):
+    from core.llm import get_llm_runner
+
+    try:
+        runner = get_llm_runner(
+            provider=llm_provider,
+            model_name=llm_model_name,
+            api_key=openai_api_key,
+        )
+        raw = runner("Return exactly 3 lines:\nanswer: 1\nconfidence: 0.9\nevidence: test", 64)
+        st.success("LLM call worked")
+        st.code(raw)
+    except Exception as e:
+        st.error(f"LLM test failed: {e}")
+
 # -------------------------------------------------------------------
 # 4. Main logic
 # -------------------------------------------------------------------
@@ -497,6 +512,18 @@ if run_btn:
 
             st.markdown("**Manual metadata (normalised to symbols):**")
             st.json(manual_metadata)
+
+            st.markdown("**LLM debug info:**")
+            st.json(details.get("llm_debug", {}))
+
+            st.markdown("**LLM raw outputs:**")
+            st.json(details.get("llm_raw", {}))
+
+            st.markdown("**LLM confidences:**")
+            st.json(details.get("llm_confidence", {}))
+
+            st.markdown("**LLM evidence:**")
+            st.json(details.get("llm_evidence", {}))
 
             symbol_values = details.get("symbol_values", {})
             if not symbol_values:

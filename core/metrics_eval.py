@@ -364,6 +364,12 @@ def compute_metrics(
 
         details["symbol_values"][sym] = None
         details["symbol_source"][sym] = "missing"
+        details["llm_debug"] = {
+            "use_llm": use_llm,
+            "llm_runner_available": llm_runner is not None,
+            "prompt_defs_available": bool(prompt_defs),
+            "required_symbols": sorted(required_symbols),
+        }
 
     # --------- LLM fallback (missing + auto=0 refinement) ----------
     if use_llm and llm_runner is not None and prompt_defs:
@@ -374,6 +380,7 @@ def compute_metrics(
         }
 
         missing_syms = []
+        details["llm_debug"]["missing_syms"] = list(missing_syms)
 
         # Collect symbols first
         for sym in sorted(required_symbols):
@@ -429,7 +436,7 @@ def compute_metrics(
             context = "\n".join(context_lines)
 
             from core.llm import infer_symbol as _infer_symbol
-
+            details["llm_debug"]["calls"] = []
             # Then call LLM
             for sym in missing_syms:
                 val, raw, conf, evid = _infer_symbol(
@@ -439,6 +446,16 @@ def compute_metrics(
                     prompt_defs=prompt_defs,
                     llm_runner=llm_runner,
                     extra_values={"N": N},
+                )
+
+                details["llm_debug"]["calls"].append(
+                    {
+                        "symbol": sym,
+                        "value": val,
+                        "confidence": conf,
+                        "evidence": evid,
+                        "raw": raw,
+                    }
                 )
 
                 details["llm_raw"][sym] = raw

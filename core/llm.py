@@ -242,7 +242,7 @@ def infer_symbol(
 
     prompt_template = prompt_defs.get(symbol)
     if not prompt_template:
-        return None, "", None, ""
+        return None, f"NO_PROMPT_FOUND_FOR_{symbol}", None, ""
 
     if isinstance(prompt_template, dict):
         prompt_template = (
@@ -252,7 +252,7 @@ def infer_symbol(
         )
 
     if not isinstance(prompt_template, str) or not prompt_template.strip():
-        return None, "", None, ""
+        return None, f"INVALID_PROMPT_FOR_{symbol}: {prompt_defs.get(symbol)}", None, ""
 
     values = {"N": N}
     if extra_values:
