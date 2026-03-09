@@ -30,6 +30,9 @@ def _safe_format(template: str, values: Dict[str, Any]) -> str:
 
 
 def format_prompt(prompt_template: str, context: str, values: Dict[str, Any]) -> str:
+    if not isinstance(prompt_template, str):
+        prompt_template = str(prompt_template)
+
     rendered = _safe_format(prompt_template.strip(), values)
     return (
         rendered
@@ -241,6 +244,16 @@ def infer_symbol(
     if not prompt_template:
         return None, "", None, ""
 
+    if isinstance(prompt_template, dict):
+        prompt_template = (
+            prompt_template.get("prompt")
+            or prompt_template.get("template")
+            or prompt_template.get("text")
+        )
+
+    if not isinstance(prompt_template, str) or not prompt_template.strip():
+        return None, "", None, ""
+
     values = {"N": N}
     if extra_values:
         values.update(extra_values)
@@ -258,7 +271,6 @@ def infer_symbol(
 
     value, confidence, evidence = _extract_structured_response(raw)
 
-    # Conservative fallback confidence
     if confidence is None and value is not None:
         confidence = 0.5
 
