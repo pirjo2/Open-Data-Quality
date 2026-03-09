@@ -438,41 +438,64 @@ def compute_metrics(
             from core.llm import infer_symbol as _infer_symbol
             details["llm_debug"]["calls"] = []
             # Then call LLM
-            for sym in missing_syms:
-                val, raw, conf, evid = _infer_symbol(
-                    symbol=sym,
-                    context=context,
-                    N=N,
-                    prompt_defs=prompt_defs,
-                    llm_runner=llm_runner,
-                    extra_values={"N": N},
-                )
+            if missing_syms:
 
-                details["llm_debug"]["calls"].append(
-                    {
-                        "symbol": sym,
-                        "value": val,
-                        "confidence": conf,
-                        "evidence": evid,
-                        "raw": raw,
-                    }
-                )
+                prompt = f"""
+            You are evaluating metadata of an open dataset.
 
-                details["llm_raw"][sym] = raw
-                details["llm_confidence"][sym] = conf
-                details["llm_evidence"][sym] = evid
+            Dataset columns:
+            {", ".join(str(c) for c in df.columns)}
 
-                # Do NOT override trino or manual
-                if details["symbol_source"].get(sym) in {"trino", "manual"}:
-                    continue
+            Return values for the following symbols.
 
-                if val is None or (conf is not None and conf < 0.4):
-                    details["symbol_source"][sym] = "llm_fail"
-                    env.setdefault(sym, 0.0)
-                else:
-                    details["symbol_source"][sym] = "llm"
-                    details["symbol_values"][sym] = val
-                    env[sym] = val
+            Symbols:
+            {", ".join(missing_syms)}
+
+            Respond ONLY as JSON.
+
+            Example:
+            {{
+            "cv": 1,
+            "dc": 1,
+            "dp": 1
+            }}
+            """
+
+                raw = llm_runner(prompt, 128)
+
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    data = {}
+
+                for sym in missing_syms:
+
+                    val = data.get(sym)
+
+                    details["llm_debug"]["calls"].append(
+                        {
+                            "symbol": sym,
+                            "value": val,
+                            "confidence": None,
+                            "evidence": "",
+                            "raw": raw,
+                        }
+                    )
+
+                    details["llm_raw"][sym] = raw
+                    details["llm_confidence"][sym] = None
+                    details["llm_evidence"][sym] = ""
+
+                    if details["symbol_source"].get(sym) in {"trino", "manual"}:
+                        continue
+
+                    if val is None:
+                        details["symbol_source"][sym] = "llm_fail"
+                        env.setdefault(sym, 0.0)
+                    else:
+                        details["symbol_source"][sym] = "llm"
+                        details["symbol_values"][sym] = val
+                        env[sym] = val
                     
     # Convert date-like symbols into numeric
     for sym in ("sd", "edp", "ed", "cd", "dp"):

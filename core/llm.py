@@ -109,7 +109,6 @@ def get_openai_runner(
                     model=model_name,
                     input=prompt,
                     max_output_tokens=max_new_tokens,
-                    temperature=0,
                     reasoning={"effort": "minimal"},
                 )
 
@@ -233,6 +232,31 @@ def _extract_structured_response(raw: str) -> Tuple[Any, Optional[float], str]:
     answer = _parse_answer_value(raw)
     return answer, confidence, evidence
 
+def infer_symbols_batch(symbols, context, prompt_defs, llm_runner):
+    symbol_list = "\n".join(symbols)
+
+    prompt = f"""
+You are evaluating metadata of an open dataset.
+
+Context:
+{context}
+
+Return values for these symbols:
+
+{symbol_list}
+
+Respond ONLY in JSON.
+"""
+
+    raw = llm_runner(prompt, 128)
+
+    import json
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}, raw
+
+    return data, raw
 
 def infer_symbol(
     symbol: str,

@@ -16,16 +16,18 @@ PROMPTS_YAML = "configs/prompts.yaml"
 
 # --- LLM options --- #
 HF_MODEL_OPTIONS = [
-    "google/flan-t5-base",
     "google/flan-t5-small",
+    "google/flan-t5-base",
+    "google/flan-t5-large",
 ]
 
 # These are example OpenAI model IDs you can expose in the UI.
 # User can also type a custom model name below.
 OPENAI_MODEL_OPTIONS = [
-    "gpt-5",
-    "gpt-5-mini",
+    "gpt-4.1-mini",
     "gpt-4.1",
+    "gpt-5-mini",
+    "gpt-5",
 ]
 
 
@@ -466,8 +468,8 @@ if run_btn:
                 openai_api_key=openai_api_key,
                 file_ext=ext,
                 manual_metadata=manual_metadata,
-                trino_metadata=trino_metadata,
-                trino_metadata_raw=trino_metadata_raw,
+                trino_metadata=trino_metadata if data_source == "Trino SQL query (beta)" else {},
+                trino_metadata_raw=trino_metadata_raw if data_source == "Trino SQL query (beta)" else {},
             )
 
         metrics_df["value"] = metrics_df["value"].apply(
