@@ -104,9 +104,9 @@ def _eval_expr(node: Any, env: Dict[str, Any]) -> float:
                     continue
                 if "if" in rule and _safe_eval_condition(rule["if"], env):
                     return _eval_expr(rule.get("then"), env)
-                if "elif" in rule and _safe_eval_condition(rule["elif"], env):
+                elif "elif" in rule and _safe_eval_condition(rule["elif"], env):
                     return _eval_expr(rule.get("then"), env)
-                if "else" in rule:
+                elif "else" in rule:
                     return _eval_expr(rule.get("else"), env)
             return float("nan")
 
@@ -263,7 +263,7 @@ def compute_metrics(
     formulas_cfg: Dict[str, Any],
     prompt_defs: Optional[Dict[str, Any]],
     use_llm: bool,
-    hf_runner,
+    llm_runner,
     file_ext: Optional[str] = None,
     manual_metadata: Optional[Dict[str, Any]] = None,
     trino_metadata: Optional[Dict[str, Any]] = None,
@@ -366,7 +366,7 @@ def compute_metrics(
         details["symbol_source"][sym] = "missing"
 
     # --------- LLM fallback (missing + auto=0 refinement) ----------
-    if use_llm and hf_runner is not None and prompt_defs:
+    if use_llm and llm_runner is not None and prompt_defs:
 
         refinable_symbols = {
             "s", "dc", "dp", "du", "sd", "edp", "ed",
@@ -437,7 +437,7 @@ def compute_metrics(
                     context=context,
                     N=N,
                     prompt_defs=prompt_defs,
-                    hf_runner=hf_runner,
+                    llm_runner=llm_runner,
                     extra_values={"N": N},
                 )
 

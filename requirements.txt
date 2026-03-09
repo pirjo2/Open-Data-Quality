@@ -11,3 +11,4 @@ sentencepiece
 safetensors
 
 trino
+openai>=1.0.0

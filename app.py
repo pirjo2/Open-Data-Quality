@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Dict, Any
 
 import pandas as pd
 import plotly.express as px
@@ -14,10 +14,18 @@ from core.pipeline import run_quality_assessment
 FORMULAS_YAML = "configs/formulas.yaml"
 PROMPTS_YAML = "configs/prompts.yaml"
 
-DEFAULT_MODEL = "google/flan-t5-base"
-MODEL_OPTIONS = [
+# --- LLM options --- #
+HF_MODEL_OPTIONS = [
     "google/flan-t5-base",
     "google/flan-t5-small",
+]
+
+# These are example OpenAI model IDs you can expose in the UI.
+# User can also type a custom model name below.
+OPENAI_MODEL_OPTIONS = [
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-4.1",
 ]
 
 
@@ -40,7 +48,6 @@ def parse_kv_metadata(text: str) -> Dict[str, Any]:
         v = v.strip()
         if not k:
             continue
-        # try numeric
         try:
             meta[k] = float(v)
         except Exception:
@@ -57,7 +64,6 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     """
     out: Dict[str, Any] = {}
 
-    # keep direct symbol keys if present
     for k, v in meta.items():
         if k in {"pb", "t", "d", "dc", "cv", "l", "id", "s", "dp", "sd", "edp", "ed", "cd"}:
             out[k] = v
@@ -71,7 +77,6 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
             return False
         return True
 
-    # map common names -> symbols (presence flags)
     title = meta.get("title")
     if "t" not in out and _present(title):
         out["t"] = 1.0
@@ -83,17 +88,15 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     publisher = meta.get("publisher") or meta.get("organization") or meta.get("org_name")
     if "pb" not in out and _present(publisher):
         out["pb"] = 1.0
-        out["s"] = 1.0 
+        out["s"] = 1.0
 
-    # --- Date of creation mapping ---
     created = (
         meta.get("metadata_created")
         or meta.get("issued")
         or meta.get("created")
         or meta.get("date_of_creation")
     )
-
-    if _present(created):
+    if "dc" not in out and _present(created):
         out["dc"] = 1.0
 
     coverage = meta.get("coverage")
@@ -112,7 +115,6 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     if "s" not in out and _present(source):
         out["s"] = 1.0
 
-    # If metadata includes explicit publication date, pass dp (date-like string)
     dp = meta.get("date_of_publication") or meta.get("metadata_modified") or meta.get("modified")
     if "dp" not in out and _present(dp):
         out["dp"] = dp
@@ -148,8 +150,11 @@ data_source = st.radio(
     horizontal=True,
 )
 
-# --- Common settings ---
+# -------------------------------------------------------------------
+# Common settings
+# -------------------------------------------------------------------
 col_settings1, col_settings2, col_settings3 = st.columns(3)
+
 with col_settings1:
     row_limit = st.number_input(
         "Row limit (0 = all rows)",
@@ -158,15 +163,70 @@ with col_settings1:
         step=10_000,
         help="For file uploads only. Set 0 to use all rows from the file.",
     )
+
 with col_settings2:
     use_llm = st.checkbox("Use AI assistance for metadata (beta)", value=True)
+
 with col_settings3:
-    hf_model_name = st.selectbox(
-        "Hugging Face model",
-        options=MODEL_OPTIONS,
+    llm_provider = st.selectbox(
+        "AI provider",
+        options=["huggingface", "openai"],
         index=0,
         disabled=not use_llm,
     )
+
+# Extra provider settings
+llm_model_name = ""
+openai_api_key: Optional[str] = None
+
+if use_llm:
+    if llm_provider == "huggingface":
+        llm_model_name = st.selectbox(
+            "Hugging Face model",
+            options=HF_MODEL_OPTIONS,
+            index=0,
+        )
+
+    elif llm_provider == "openai":
+        col_openai1, col_openai2 = st.columns(2)
+
+        with col_openai1:
+            openai_model_preset = st.selectbox(
+                "OpenAI model",
+                options=OPENAI_MODEL_OPTIONS,
+                index=0,
+                help="Choose a preset or override it with a custom model name below.",
+            )
+
+        with col_openai2:
+            custom_openai_model = st.text_input(
+                "Custom OpenAI model name (optional)",
+                value="",
+                placeholder="e.g. gpt-5 or another model ID",
+            )
+
+        llm_model_name = custom_openai_model.strip() or openai_model_preset
+
+        openai_api_key = st.text_input(
+            "OpenAI API key",
+            type="password",
+            value="",
+            help="Used only for this session unless you store it in Streamlit secrets or environment variables.",
+        )
+
+        if not openai_api_key:
+            try:
+                openai_api_key = st.secrets.get("OPENAI_API_KEY", "")
+            except Exception:
+                openai_api_key = ""
+
+        if not openai_api_key:
+            openai_api_key = os.getenv("OPENAI_API_KEY", "")
+
+        if openai_api_key:
+            st.caption("OpenAI API key detected.")
+        else:
+            st.caption("No OpenAI API key detected yet.")
 
 # -------------------------------------------------------------------
 # 2A. File upload UI
@@ -234,7 +294,7 @@ Optionally, you can also run a **metadata query** (one-row result) to provide po
     )
 
 # -------------------------------------------------------------------
-# 2C. Manual metadata textbox (both modes)
+# 2C. Manual metadata textbox
 # -------------------------------------------------------------------
 st.subheader("2) Optional manual metadata")
 manual_meta_text = st.text_area(
@@ -263,6 +323,10 @@ run_btn = st.button("Run assessment", type="primary")
 # -------------------------------------------------------------------
 if run_btn:
     try:
+        if use_llm and llm_provider == "openai" and not openai_api_key:
+            st.error("Please enter an OpenAI API key or configure OPENAI_API_KEY in Streamlit secrets/environment.")
+            st.stop()
+
         df: Optional[pd.DataFrame] = None
         ext: Optional[str] = None
         trino_metadata: Dict[str, Any] = {}
@@ -339,7 +403,6 @@ if run_btn:
                 st.error(f"Failed to execute Trino data query: {e}")
                 st.stop()
 
-            # Optional metadata query
             if trino_meta_sql.strip():
                 try:
                     meta_df = pd.read_sql(trino_meta_sql, conn)
@@ -349,6 +412,7 @@ if run_btn:
                         trino_metadata = normalize_metadata_to_symbols(trino_metadata_raw)
                 except Exception as e:
                     st.warning(f"Metadata query failed (continuing without it): {e}")
+
             if not trino_metadata_raw:
                 trino_metadata_raw = manual_metadata_raw
 
@@ -363,12 +427,12 @@ if run_btn:
 
         # Preview
         st.subheader("Preview of the dataset")
-        # Fix nested object columns for Arrow compatibility
         for col in df.columns:
             if df[col].dtype == "object":
                 df[col] = df[col].apply(
                     lambda x: str(x) if isinstance(x, (dict, list, tuple)) else x
                 )
+
         st.dataframe(df.head(20), width="stretch")
         st.caption(f"{df.shape[0]} rows × {df.shape[1]} columns used for metrics.")
 
@@ -382,16 +446,19 @@ if run_btn:
                 formulas_yaml_path=FORMULAS_YAML,
                 prompts_yaml_path=PROMPTS_YAML,
                 use_llm=use_llm,
-                hf_model_name=hf_model_name,
+                llm_provider=llm_provider,
+                llm_model_name=llm_model_name,
+                openai_api_key=openai_api_key,
                 file_ext=ext,
                 manual_metadata=manual_metadata,
-                trino_metadata={},            
+                trino_metadata=trino_metadata,
                 trino_metadata_raw=trino_metadata_raw,
-)
+            )
 
         metrics_df["value"] = metrics_df["value"].apply(
             lambda x: float(x) if isinstance(x, (int, float)) else None
         )
+
         st.subheader("Quality metrics")
         if metrics_df.empty or metrics_df["value"].dropna().empty:
             st.info("No metrics could be computed.")
@@ -451,8 +518,6 @@ if run_btn:
                     )
 
                 debug_df = pd.DataFrame(rows)
-
-                # Fix Arrow dtype issues
                 debug_df["value"] = debug_df["value"].astype(str)
                 debug_df["llm_confidence"] = pd.to_numeric(debug_df["llm_confidence"], errors="coerce")
                 debug_df["llm_evidence"] = debug_df["llm_evidence"].astype(str)
