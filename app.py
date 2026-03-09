@@ -9,6 +9,7 @@ import streamlit as st
 
 from core.utils import make_arrow_safe
 from core.pipeline import run_quality_assessment
+from core.llm import get_llm_runner, infer_manual_metadata_symbols
 
 # --- Paths --- #
 FORMULAS_YAML = "configs/formulas.yaml"
@@ -356,6 +357,37 @@ if run_btn:
         trino_metadata: Dict[str, Any] = {}
         manual_metadata_raw = parse_kv_metadata(manual_meta_text)
         manual_metadata = normalize_metadata_to_symbols(manual_metadata_raw)
+
+        manual_metadata_llm_raw = ""
+        manual_metadata_llm = {}
+
+        # If the manual textbox contains richer free text and the rule-based parser
+        # found very little, use LLM to interpret the metadata text.
+        if use_llm and manual_meta_text.strip():
+            looks_like_free_text = (
+                len(manual_meta_text.splitlines()) > 2
+                or len(manual_meta_text) > 180
+            )
+
+            if looks_like_free_text and len(manual_metadata) <= 1:
+                try:
+                    manual_llm_runner = get_llm_runner(
+                        provider=llm_provider,
+                        model_name=llm_model_name,
+                        api_key=openai_api_key,
+                    )
+                    manual_metadata_llm, manual_metadata_llm_raw = infer_manual_metadata_symbols(
+                        manual_meta_text,
+                        manual_llm_runner,
+                    )
+
+                    # Merge: explicit rule-based mapping wins, AI fills the gaps
+                    merged_manual_metadata = dict(manual_metadata_llm)
+                    merged_manual_metadata.update(manual_metadata)
+                    manual_metadata = merged_manual_metadata
+
+                except Exception:
+                    pass
         trino_metadata_raw: Dict[str, Any] = {}
 
         conn = None
@@ -522,6 +554,13 @@ if run_btn:
 
             st.markdown("**Manual metadata (normalised to symbols):**")
             st.json(manual_metadata)
+            if manual_metadata_llm:
+                st.markdown("**Manual metadata interpreted by AI:**")
+                st.json(manual_metadata_llm)
+
+            if manual_metadata_llm_raw:
+                st.markdown("**Manual metadata AI raw output:**")
+                st.code(manual_metadata_llm_raw, language="json")
 
             st.markdown("**LLM debug info:**")
             st.json(details.get("llm_debug", {}))

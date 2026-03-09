@@ -307,3 +307,84 @@ def infer_symbol(
         confidence = 0.5
 
     return value, raw, confidence, evidence
+
+def infer_manual_metadata_symbols(
+    text: str,
+    llm_runner,
+) -> Tuple[Dict[str, Any], str]:
+    """
+    Interpret free-text metadata and return a Vetrò symbol dict.
+
+    Returns:
+        (parsed_symbols_dict, raw_output)
+    """
+    if not llm_runner or not text or not text.strip():
+        return {}, ""
+
+    prompt = f"""
+You are extracting structured metadata for Vetrò-style open data quality evaluation.
+
+Read the metadata text below and return ONLY valid JSON.
+
+Rules:
+- Use only these keys if evidence exists:
+  pb, t, d, dc, cv, l, id, s, dp, sd, edp, ed, cd, lu, du
+- For presence-type fields use:
+  1 = present
+  0 = missing
+- For date fields (dp, sd, edp, ed, cd), return ISO format YYYY-MM-DD when clearly present.
+- Do not invent values.
+- If a field is not clearly supported by the text, omit it.
+- Return ONLY JSON, no explanation.
+
+Metadata text:
+\"\"\"
+{text}
+\"\"\"
+
+Example output:
+{{
+  "t": 1,
+  "d": 1,
+  "s": 1,
+  "lu": 1,
+  "du": 1,
+  "id": 1,
+  "cv": 1,
+  "sd": "2022-10-03",
+  "edp": "2023-10-01"
+}}
+"""
+
+    try:
+        raw = llm_runner(prompt, 256)
+    except Exception as e:
+        return {}, f"LLM_ERROR: {e}"
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {}, raw
+
+        allowed_keys = {
+            "pb", "t", "d", "dc", "cv", "l", "id", "s",
+            "dp", "sd", "edp", "ed", "cd", "lu", "du"
+        }
+
+        cleaned: Dict[str, Any] = {}
+        for k, v in data.items():
+            if k not in allowed_keys:
+                continue
+
+            if k in {"dp", "sd", "edp", "ed", "cd"}:
+                if isinstance(v, str) and DATE_RE.search(v):
+                    cleaned[k] = DATE_RE.search(v).group(1)
+                continue
+
+            if v in [0, 1]:
+                cleaned[k] = float(v)
+
+        return cleaned, raw
+
+    except Exception:
+        return {}, raw
