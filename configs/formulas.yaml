@@ -1,21 +1,19 @@
 meta:
   name: Vetrò et al. (2016) Open Data Quality Measurement Framework
-  file_purpose: Machine-readable definition of Vetrò metrics (structured expression
-    trees) for automated scoring.
+  file_purpose: Machine-readable definition of Vetrò metrics (structured expression trees) for automated scoring.
   notes:
-  - All expressions are represented as operator trees (Option B).
-  - Symbol 's' is reserved for Source presence (0/1). Symbol 'sc' is used for Scale
-    in accuracy_in_aggregation to avoid collision.
-  - Some portal/metadata-derived inputs may be provided manually or inferred via LLM
-    prompts in the runner script.
+    - All expressions are represented as operator trees (Option B).
+    - Symbol 's' is reserved for Source presence (0/1). Symbol 'sc' is used for Scale in accuracy_in_aggregation to avoid collision.
+    - Some portal/metadata-derived inputs may be provided manually or inferred via LLM prompts in the runner script.
+    - Currentness delay metrics are represented as quality scores where higher is better and values are clamped to [0,1].
+
 vetro_methodology:
   traceability:
     track_of_creation:
-      description: Indicates the presence or absence of metadata associated with the
-        process of creation of a dataset.
+      description: Indicates the presence or absence of metadata associated with the process of creation of a dataset.
       inputs:
-      - source: s
-      - date_of_creation: dc
+        - source: s
+        - date_of_creation: dc
       formula:
         assign: tc
         expression:
@@ -31,12 +29,12 @@ vetro_methodology:
           operator: divide
           left: tc
           right: 3
+
     track_of_updates:
-      description: Indicates the existence or absence of metadata associated with
-        the updates done to a dataset.
+      description: Indicates the existence or absence of metadata associated with the updates done to a dataset.
       inputs:
-      - list_of_updates: lu
-      - dates_of_updates: du
+        - list_of_updates: lu
+        - dates_of_updates: du
       formula:
         assign: tu
         expression:
@@ -49,14 +47,13 @@ vetro_methodology:
           operator: divide
           left: tu
           right: 2
+
   currentness:
     percentage_of_current_rows:
-      description: Indicates the percentage of rows of a dataset that have current
-        values, it means that they don’t have any value that refers to a previous
-        or a following period of time.
+      description: Indicates the percentage of rows of a dataset that have current values, meaning that they do not refer to a previous or following period of time.
       inputs:
-      - number_of_not_current_rows: ncr
-      - number_of_rows: nr
+        - number_of_not_current_rows: ncr
+        - number_of_rows: nr
       formula:
         assign: pcr
         expression:
@@ -75,21 +72,19 @@ vetro_methodology:
           operator: divide
           left: pcr
           right: 100
+
     delay_in_publication:
-      description: Indicates the ratio between the delay in the publication (number
-        of days passed between the moment in which the information is available and
-        the publication of the dataset) and the period of time referred by the dataset
-        (week, month, year).
+      description: Quality score derived from the publication delay, i.e. the ratio between the delay in publication and the period referred by the dataset. Higher is better.
       inputs:
-      - end_date_of_period: edp
-      - date_of_publication: dp
-      - start_date_of_period: sd
+        - end_date_of_period: edp
+        - date_of_publication: dp
+        - start_date_of_period: sd
       intermediate_calculation:
-      - assign: da
-        expression:
-          operator: add
-          left: edp
-          right: 1
+        - assign: da
+          expression:
+            operator: add
+            left: edp
+            right: 1
       formula:
         assign: dip
         expression:
@@ -108,17 +103,21 @@ vetro_methodology:
       normalization:
         assign: dipn
         expression:
-          operator: identity
-          operand: dip
+          operator: conditional
+          conditions:
+            - if: dip <= 0
+              then: 0
+            - elif: dip <= 1
+              then: dip
+            - else: 1
+
     delay_after_expiration:
-      description: Indicates the ratio between the delay in the publication of a dataset
-        after the expiration of its previous version and the period of time referred
-        by the dataset (week, month, year).
+      description: Quality score derived from the delay after expiration of the previous version relative to the dataset period. Higher is better.
       inputs:
-      - expiration_date: ed
-      - current_date: cd
-      - start_date_of_period: sd
-      - end_date_of_period: edp
+        - expiration_date: ed
+        - current_date: cd
+        - start_date_of_period: sd
+        - end_date_of_period: edp
       formula:
         assign: dae
         expression:
@@ -139,20 +138,19 @@ vetro_methodology:
         expression:
           operator: conditional
           conditions:
-          - if: dae <= 0
-            then: 0
-          - elif: dae <= 1
-            then: dae
-          - else: 1
+            - if: dae <= 0
+              then: 0
+            - elif: dae <= 1
+              then: dae
+            - else: 1
+
   completeness:
     percentage_of_complete_cells:
-      description: Indicates the percentage of complete cells in a dataset. It means
-        the cells that are not empty and have a meaningful value assigned (i.e. a
-        value coherent with the domain of the column).
+      description: Indicates the percentage of complete cells in a dataset. These are cells that are not empty and have a meaningful value assigned.
       inputs:
-      - number_of_rows: nr
-      - number_of_columns: nc
-      - number_of_incomplete_cells: ic
+        - number_of_rows: nr
+        - number_of_columns: nc
+        - number_of_incomplete_cells: ic
       intermediate_calculation:
         assign: ncl
         expression:
@@ -177,12 +175,12 @@ vetro_methodology:
           operator: divide
           left: pcc
           right: 100
+
     percentage_of_complete_rows:
-      description: Indicates the percentage of complete rows in a dataset. It means
-        the rows that don’t have any incomplete cell.
+      description: Indicates the percentage of complete rows in a dataset. These are rows without incomplete cells.
       inputs:
-      - number_of_rows: nr
-      - number_of_incomplete_rows: nir
+        - number_of_rows: nr
+        - number_of_incomplete_rows: nir
       formula:
         assign: pcpr
         expression:
@@ -201,14 +199,13 @@ vetro_methodology:
           operator: divide
           left: pcpr
           right: 100
+
   compliance:
     percentage_of_standardized_columns:
-      description: Indicates the percentage of standardized columns in a dataset.
-        It just considers the columns that represent some kind of information that
-        has standards associated with it (i.e. geographic information).
+      description: Indicates the percentage of standardized columns in a dataset. It considers only columns that represent information with associated standards.
       inputs:
-      - number_of_columns_with_standards: ns
-      - number_of_standardized_columns: nsc
+        - number_of_columns_with_standards: ns
+        - number_of_standardized_columns: nsc
       formula:
         assign: psc
         expression:
@@ -225,83 +222,79 @@ vetro_methodology:
           left: psc
           right: 100
       errata:
-        note: The original Vetrò et al. (2016) table shows the ratio as ns/nsc, which
-          can exceed 100% given the variable definitions. This YAML uses nsc/ns to
-          match 'percentage of standardized columns' and keep results within [0,100].
+        note: The original Vetrò et al. (2016) table shows the ratio as ns/nsc, which can exceed 100% given the variable definitions. This YAML uses nsc/ns to match 'percentage of standardized columns' and keep results within [0,100].
         original_formula_as_printed: psc = (ns / nsc) * 100
         formula_used_here: psc = (nsc / ns) * 100
+
     egms_compliance:
-      description: Indicates the degree to which a dataset follows the e-GMS standard
-        (as far as the basic elements are concerned, it essentially boils down to
-        a specification of which Dublin Core metadata should be supplied).
+      description: Indicates the degree to which a dataset follows the e-GMS standard.
       inputs:
-      - category: c
-      - title: t
-      - description: d
-      - identifier: id
-      - publisher: pb
-      - coverage: cv
-      - language: l
-      - source: s
-      - date_of_creation: dc
+        - category: c
+        - title: t
+        - description: d
+        - identifier: id
+        - publisher: pb
+        - coverage: cv
+        - language: l
+        - source: s
+        - date_of_creation: dc
       formula:
         assign: egmsc
         expression:
           operator: add
           terms:
-          - s
-          - dc
-          - c
-          - t
-          - operator: multiply
-            left: 0.2
-            right:
-              operator: add
-              terms:
-              - d
-              - id
-              - pb
-              - cv
-              - l
+            - s
+            - dc
+            - c
+            - t
+            - operator: multiply
+              left: 0.2
+              right:
+                operator: add
+                terms:
+                  - d
+                  - id
+                  - pb
+                  - cv
+                  - l
       normalization:
         assign: egmscn
         expression:
           operator: divide
           left: egmsc
           right: 5
+
     five_stars_open_data:
-      description: Indicates the level of the 5 Star Open Data model in which the
-        dataset is and the advantage offered by this reason.
+      description: Indicates the level of the 5 Star Open Data model achieved by the dataset.
       inputs:
-      - available_on_web: s1
-      - structured_format: s2
-      - open_format: s3
-      - use_of_uris: s4
-      - linked_open_data: s5
+        - available_on_web: s1
+        - structured_format: s2
+        - open_format: s3
+        - use_of_uris: s4
+        - linked_open_data: s5
       formula:
         assign: fsod
         expression:
           operator: add
           terms:
-          - s1
-          - s2
-          - s3
-          - s4
-          - s5
+            - s1
+            - s2
+            - s3
+            - s4
+            - s5
       normalization:
         assign: fsodn
         expression:
           operator: divide
           left: fsod
           right: 5
+
   understandability:
     percentage_of_columns_with_metadata:
-      description: Indicates the percentage of columns in a dataset that have associated
-        descriptive metadata. This metadata is important because it allows to easily
-        understanding the information of the data and the way it is represented.
+      description: Indicates the percentage of columns in a dataset that have associated descriptive metadata.
       inputs:
-      - number_of_columns_with_metadata: ncm
-      - number_of_columns: nc
+        - number_of_columns_with_metadata: ncm
+        - number_of_columns: nc
       formula:
         assign: pcm
         expression:
@@ -317,12 +310,12 @@ vetro_methodology:
           operator: divide
           left: pcm
           right: 100
+
     percentage_of_columns_in_comprehensible_format:
-      description: Indicates the percentage of columns in a dataset that are represented
-        in a format that can be easily understood by the users and it is also machinereadable.
+      description: Indicates the percentage of columns in a dataset represented in a format that can be easily understood by users and is machine-readable.
       inputs:
-      - number_of_columns_in_understandable_format: ncuf
-      - number_of_columns: nc
+        - number_of_columns_in_understandable_format: ncuf
+        - number_of_columns: nc
       formula:
         assign: pcuf
         expression:
@@ -338,13 +331,13 @@ vetro_methodology:
           operator: divide
           left: pcuf
           right: 100
+
   accuracy:
     percentage_of_syntactically_accurate_cells:
-      description: Indicates the percentage cells in a dataset that have correct values
-        according to the domain and the type of information of the dataset.
+      description: Indicates the percentage of cells in a dataset that have correct values according to the domain and type of information of the dataset.
       inputs:
-      - number_of_cells_with_errors: nce
-      - number_of_cells: ncl
+        - number_of_cells_with_errors: nce
+        - number_of_cells: ncl
       formula:
         assign: pac
         expression:
@@ -363,23 +356,19 @@ vetro_methodology:
           operator: divide
           left: pac
           right: 100
+
     accuracy_in_aggregation:
-      description: Indicates the ratio between the error in aggregation and the scale
-        of data representation. This metric only applies for the datasets that have
-        aggregation columns or when there are two or more datasets referring to the
-        same information but in a different granularity level.
+      description: Indicates the ratio between the aggregation error and the scale of data representation. This simplified implementation compares one dataset aggregation value against one own aggregation value.
       inputs:
-      - scale: sc
-      - own_aggregation_value: oav
-      - dataset_aggregation_value: dav
+        - scale: sc
+        - own_aggregation_value: oav
+        - dataset_aggregation_value: dav
       intermediate_calculation:
         assign: e
         expression:
-          operator: sum
-          of:
-            operator: abs_diff
-            left: dav_i
-            right: oav_i
+          operator: abs_diff
+          left: dav
+          right: oav
       formula:
         assign: ea
         expression:
@@ -394,25 +383,12 @@ vetro_methodology:
         expression:
           operator: conditional
           conditions:
-          - if: ea <= 0
-            then: 0
-          - elif: ea <= 0.9
-            then:
-              operator: multiply
-              left: 0.25
-              right: ea
-          - elif: ea <= 0.95
-            then:
-              operator: multiply
-              left: 0.5
-              right: ea
-          - elif: ea <= 0.999
-            then:
-              operator: multiply
-              left: 0.75
-              right: ea
-          - else: ea
-  labels:
+            - if: ea <= 0
+              then: 0
+            - elif: ea <= 1
+              then: ea
+            - else: 1
+
   completeness.percentage_of_complete_cells: "Complete cells (%)"
   completeness.percentage_of_complete_rows: "Complete rows (%)"
   accuracy.accuracy_in_aggregation: "Accuracy in aggregation (%)"
@@ -420,8 +396,8 @@ vetro_methodology:
   traceability.track_of_creation: "Creation traceability"
   traceability.track_of_updates: "Update traceability"
   currentness.percentage_of_current_rows: "Current rows (%)"
-  currentness.delay_in_publication: "Publication delay"
-  currentness.delay_after_expiration: "Delay after expiration"
+  currentness.delay_in_publication: "Publication timeliness"
+  currentness.delay_after_expiration: "Freshness after expiration"
   compliance.five_stars_open_data: "5-star open data"
   compliance.percentage_of_standardized_columns: "Standardized columns (%)"
   compliance.egms_compliance: "eGMS compliance"
