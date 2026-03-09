@@ -43,7 +43,7 @@ def run_quality_assessment(
         formulas_cfg=formulas_cfg,
         prompt_defs=prompt_defs,
         use_llm=use_llm,
-        hf_runner=llm_runner,
+        llm_runner=llm_runner,
         file_ext=file_ext,
         manual_metadata=manual_metadata or {},
         trino_metadata=trino_metadata or {},
