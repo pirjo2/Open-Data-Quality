@@ -443,20 +443,22 @@ def compute_metrics(
                 prompt = f"""
             You are evaluating metadata of an open dataset.
 
-            Dataset columns:
-            {", ".join(str(c) for c in df.columns)}
+            For each symbol return ONLY:
 
-            Return values for the following symbols.
+            0 = metadata missing
+            1 = metadata present
+
+            Never return any value other than 0 or 1.
 
             Symbols:
             {", ".join(missing_syms)}
 
-            Respond ONLY as JSON.
+            Return ONLY valid JSON.
 
             Example:
             {{
             "cv": 1,
-            "dc": 1,
+            "dc": 0,
             "dp": 1
             }}
             """
@@ -468,9 +470,13 @@ def compute_metrics(
                 except Exception:
                     data = {}
 
+                # LOOP tagasi
                 for sym in missing_syms:
 
                     val = data.get(sym)
+
+                    if val not in [0, 1]:
+                        val = None
 
                     details["llm_debug"]["calls"].append(
                         {
