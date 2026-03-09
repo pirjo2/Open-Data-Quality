@@ -100,7 +100,7 @@ def get_openai_runner(
 
     client = OpenAI(api_key=resolved_api_key)
 
-    def runner(prompt: str, max_new_tokens: int = 128) -> str:
+    def runner(prompt: str, max_new_tokens: int = 40) -> str:
         last_error: Optional[Exception] = None
 
         for attempt in range(max_retries + 1):
@@ -109,6 +109,8 @@ def get_openai_runner(
                     model=model_name,
                     input=prompt,
                     max_output_tokens=max_new_tokens,
+                    temperature=0,
+                    reasoning={"effort": "minimal"},
                 )
 
                 text = getattr(response, "output_text", None)
