@@ -109,7 +109,6 @@ def get_openai_runner(
                     model=model_name,
                     input=prompt,
                     max_output_tokens=max_new_tokens,
-                    reasoning={"effort": "minimal"},
                 )
 
                 text = getattr(response, "output_text", None)

@@ -505,6 +505,7 @@ if run_btn:
             )
 
         # Debug
+        st.write("LLM calls:", len(details["llm_debug"].get("calls", [])))
         with st.expander("Debug: auto-derived inputs and AI/metadata inferences"):
             st.markdown("**Auto-derived inputs (from the table only):**")
             st.json(details.get("auto_inputs", {}))
