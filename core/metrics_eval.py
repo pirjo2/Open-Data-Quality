@@ -342,7 +342,7 @@ def compute_metrics(
         if details["symbol_source"].get(sym) == "parser":
             continue
         # Auto only if NOT traceability core symbols
-        if sym in auto_inputs and sym not in {"s", "dc"}:
+        if sym in auto_inputs and sym not in {"s", "dc"} and auto_inputs[sym] is not None:
             details["symbol_values"][sym] = auto_inputs[sym]
             details["symbol_source"][sym] = "auto"
             env[sym] = auto_inputs[sym]
