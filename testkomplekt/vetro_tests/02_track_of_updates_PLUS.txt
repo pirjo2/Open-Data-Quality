@@ -1,1 +1,4 @@
-updates: [{version:1.0, update_date:2026-01-15}, {version:1.1, update_date:2026-02-10}]
+The dataset is updated regularly.
+Update history:
+- version 1.0, updated on 2026-01-15
+- version 1.1, updated on 2026-02-10

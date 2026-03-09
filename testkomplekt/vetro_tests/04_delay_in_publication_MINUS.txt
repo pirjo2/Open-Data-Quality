@@ -1,4 +1,2 @@
-information_availability_date: 2025-10-01
-publication_date: 2026-02-21
-dataset_period: week
-period_days: 7
+The dataset covers the period from 2026-02-01 to 2026-02-28.
+The dataset was published on 2026-06-15.

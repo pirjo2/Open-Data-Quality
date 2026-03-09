@@ -338,24 +338,33 @@ def compute_metrics(
             details["symbol_source"]["edp"] = "parser"
 
     # --------- PRIORITY RESOLUTION: auto -> trino -> manual -> missing ----------
+    details["llm_debug"] = {
+        "use_llm": use_llm,
+        "llm_runner_available": llm_runner is not None,
+        "prompt_defs_available": bool(prompt_defs),
+        "required_symbols": sorted(required_symbols),
+    }
+
     for sym in sorted(required_symbols):
         if details["symbol_source"].get(sym) == "parser":
             continue
+
         # Auto only if NOT traceability core symbols
+        # Important: auto values should only win if they are actually not None
         if sym in auto_inputs and sym not in {"s", "dc"} and auto_inputs[sym] is not None:
             details["symbol_values"][sym] = auto_inputs[sym]
             details["symbol_source"][sym] = "auto"
             env[sym] = auto_inputs[sym]
             continue
 
-        if sym in trino_metadata:
+        if sym in trino_metadata and trino_metadata[sym] is not None:
             val = trino_metadata[sym]
             details["symbol_values"][sym] = val
             details["symbol_source"][sym] = "trino"
             env[sym] = val
             continue
 
-        if sym in manual_metadata:
+        if sym in manual_metadata and manual_metadata[sym] is not None:
             val = manual_metadata[sym]
             details["symbol_values"][sym] = val
             details["symbol_source"][sym] = "manual"
@@ -364,14 +373,8 @@ def compute_metrics(
 
         details["symbol_values"][sym] = None
         details["symbol_source"][sym] = "missing"
-        details["llm_debug"] = {
-            "use_llm": use_llm,
-            "llm_runner_available": llm_runner is not None,
-            "prompt_defs_available": bool(prompt_defs),
-            "required_symbols": sorted(required_symbols),
-        }
 
-    # --------- LLM fallback (missing + auto=0 refinement) ----------
+    # --------- LLM fallback (missing + auto=None refinement) ----------
     if use_llm and llm_runner is not None and prompt_defs:
 
         refinable_symbols = {
@@ -380,7 +383,6 @@ def compute_metrics(
         }
 
         missing_syms = []
-        details["llm_debug"]["missing_syms"] = list(missing_syms)
 
         # Collect symbols first
         for sym in sorted(required_symbols):
@@ -395,7 +397,7 @@ def compute_metrics(
                 missing_syms.append(sym)
                 continue
 
-            # Case 2: auto=0 and refinable
+            # Case 2: auto=None and refinable
             if (
                 sym in refinable_symbols
                 and source == "auto"
@@ -403,9 +405,11 @@ def compute_metrics(
             ):
                 missing_syms.append(sym)
 
+        details["llm_debug"]["missing_syms"] = list(missing_syms)
+        details["llm_debug"]["calls"] = []
+
         # Only now build context
         if missing_syms:
-
             context_lines = []
             context_lines.append("Columns:")
             context_lines.append(", ".join(str(c) for c in df.columns))
@@ -420,6 +424,7 @@ def compute_metrics(
                 context_lines.append(
                     f"- {col}: dtype={dtype}, missing={missing_ratio:.3f}, samples={sample_vals}"
                 )
+
             context_lines.append("")
             context_lines.append("Raw metadata record from portal (JSON):")
             context_lines.append(
@@ -435,73 +440,87 @@ def compute_metrics(
 
             context = "\n".join(context_lines)
 
-            from core.llm import infer_symbol as _infer_symbol
-            details["llm_debug"]["calls"] = []
-            # Then call LLM
-            if missing_syms:
+            prompt = f"""
+    You are evaluating metadata of an open dataset.
 
-                prompt = f"""
-            You are evaluating metadata of an open dataset.
+    Use the dataset context below and determine whether each requested metadata symbol is present.
 
-            For each symbol return ONLY:
+    Rules:
+    - Return ONLY valid JSON.
+    - Use only the requested symbols as keys.
+    - For presence-type fields return only:
+    0 = missing
+    1 = present
+    - For date-type fields (dp, sd, edp, ed, cd), return YYYY-MM-DD only if clearly supported by the context.
+    - If a field is not clearly supported, return 0 for presence fields and omit unclear date fields.
+    - Never return values other than 0 or 1 for presence fields.
 
-            0 = metadata missing
-            1 = metadata present
+    Requested symbols:
+    {", ".join(missing_syms)}
 
-            Never return any value other than 0 or 1.
+    Dataset context:
+    {context}
 
-            Symbols:
-            {", ".join(missing_syms)}
+    Example output:
+    {{
+    "cv": 1,
+    "dc": 0,
+    "dp": "2024-01-15",
+    "id": 1,
+    "l": 1,
+    "sd": "2022-10-03"
+    }}
+    """
 
-            Return ONLY valid JSON.
+            raw = llm_runner(prompt, 256)
 
-            Example:
-            {{
-            "cv": 1,
-            "dc": 0,
-            "dp": 1
-            }}
-            """
-
-                raw = llm_runner(prompt, 128)
-
-                try:
-                    data = json.loads(raw)
-                except Exception:
+            try:
+                data = json.loads(raw)
+                if not isinstance(data, dict):
                     data = {}
+            except Exception:
+                data = {}
 
-                # LOOP tagasi
-                for sym in missing_syms:
+            date_symbols = {"dp", "sd", "edp", "ed", "cd"}
+            presence_symbols = set(missing_syms) - date_symbols
 
-                    val = data.get(sym)
+            # One LLM call, then distribute values to symbols
+            details["llm_debug"]["calls"].append(
+                {
+                    "symbols": list(missing_syms),
+                    "raw": raw,
+                }
+            )
 
+            for sym in missing_syms:
+                val = data.get(sym)
+
+                if sym in presence_symbols:
                     if val not in [0, 1]:
                         val = None
 
-                    details["llm_debug"]["calls"].append(
-                        {
-                            "symbol": sym,
-                            "value": val,
-                            "confidence": None,
-                            "evidence": "",
-                            "raw": raw,
-                        }
-                    )
-
-                    details["llm_raw"][sym] = raw
-                    details["llm_confidence"][sym] = None
-                    details["llm_evidence"][sym] = ""
-
-                    if details["symbol_source"].get(sym) in {"trino", "manual"}:
-                        continue
-
-                    if val is None:
-                        details["symbol_source"][sym] = "llm_fail"
-                        env.setdefault(sym, 0.0)
+                elif sym in date_symbols:
+                    if isinstance(val, str):
+                        m = re.search(r"\d{4}-\d{2}-\d{2}", val)
+                        val = m.group(0) if m else None
                     else:
-                        details["symbol_source"][sym] = "llm"
-                        details["symbol_values"][sym] = val
-                        env[sym] = val
+                        val = None
+
+                details["llm_raw"][sym] = raw
+                details["llm_confidence"][sym] = None
+                details["llm_evidence"][sym] = ""
+
+                # Do NOT override trino or manual
+                if details["symbol_source"].get(sym) in {"trino", "manual"}:
+                    continue
+
+                if val is None:
+                    details["symbol_source"][sym] = "llm_fail"
+                    env.setdefault(sym, 0.0)
+                else:
+                    details["symbol_source"][sym] = "llm"
+                    details["symbol_values"][sym] = val
+                    env[sym] = val
                     
     # Convert date-like symbols into numeric
     for sym in ("sd", "edp", "ed", "cd", "dp"):
