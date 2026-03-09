@@ -121,6 +121,13 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     if "dp" not in out and _present(dp):
         out["dp"] = dp
 
+    updates = meta.get("updates")
+    if "lu" not in out and updates:
+        out["lu"] = 1.0
+
+    if "du" not in out and updates:
+        out["du"] = 1.0
+
     return out
 
 
