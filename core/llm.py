@@ -90,7 +90,7 @@ def get_hf_runner(model_name: str) -> Callable[[str, int], str]:
 def get_openai_runner(
     model_name: str,
     api_key: Optional[str] = None,
-    max_retries: int = 2,
+    max_retries: int = 1,
 ) -> Callable[[str, int], str]:
     from openai import OpenAI
 
@@ -110,18 +110,25 @@ def get_openai_runner(
                     input=prompt,
                     max_output_tokens=max_new_tokens,
                 )
-                text = (response.output_text or "").strip()
-                if text:
-                    return text
-                return ""
+
+                text = getattr(response, "output_text", None)
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+
+                # Kui output_text on tühi, tagasta kogu response debugiks
+                try:
+                    return f"EMPTY_OUTPUT | FULL_RESPONSE: {response.model_dump_json(indent=2)}"
+                except Exception:
+                    return f"EMPTY_OUTPUT | RESPONSE_REPR: {response!r}"
+
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
-                    time.sleep(1.2 * (attempt + 1))
+                    time.sleep(1.0)
                     continue
-                break
+                return f"OPENAI_ERROR: {e}"
 
-        raise RuntimeError(f"OpenAI request failed: {last_error}")
+        return f"OPENAI_ERROR: {last_error}"
 
     return runner
 
