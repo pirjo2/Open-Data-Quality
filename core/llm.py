@@ -406,39 +406,43 @@ def infer_manual_metadata_symbols(
         return {}, ""
 
     prompt = f"""
-You are extracting structured metadata for Vetrò-style open data quality evaluation.
+    You are extracting structured metadata for Vetrò-style open data quality evaluation.
 
-Read the metadata text below and return ONLY valid JSON.
+    Read the metadata text below and return ONLY valid JSON.
 
-Rules:
-- Use only these keys if evidence exists:
-  pb, t, d, dc, cv, l, id, s, dp, sd, edp, ed, cd, lu, du, c
-- For presence-type fields use:
-  1 = present
-  0 = missing
-- For date fields (dp, sd, edp, ed, cd), return ISO format YYYY-MM-DD when clearly present.
-- Do not invent values.
-- If a field is not clearly supported by the text, omit it.
-- Return ONLY JSON, no explanation.
+    Rules:
+    - Use only these keys if evidence exists:
+    pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
+    - For presence-type fields use:
+    1 = present
+    0 = missing
+    - For date fields (dp, sd, edp, ed, cd), return ISO format YYYY-MM-DD only when clearly present.
+    - Natural-language update frequency counts as lu=1 even if no exact dates are given.
+    - du=1 only when update dates are explicitly present.
+    - Statements like "title is missing", "no category provided", "source is not given" mean the corresponding field is 0.
+    - Do not invent values.
+    - If a field is not clearly supported by the text, omit it.
+    - Return ONLY JSON, no explanation.
 
-Metadata text:
-\"\"\"
-{text}
-\"\"\"
+    Metadata text:
+    \"\"\"
+    {text}
+    \"\"\"
 
-Example output:
-{{
-  "t": 1,
-  "d": 1,
-  "s": 1,
-  "lu": 1,
-  "du": 1,
-  "id": 1,
-  "cv": 1,
-  "sd": "2022-10-03",
-  "edp": "2023-10-01"
-}}
-"""
+    Example output:
+    {{
+    "t": 1,
+    "d": 1,
+    "s": 1,
+    "c": 0,
+    "lu": 1,
+    "du": 0,
+    "id": 1,
+    "cv": 1,
+    "sd": "2022-10-03",
+    "edp": "2023-10-01"
+    }}
+    """
 
     try:
         raw = llm_runner(prompt, 256)
@@ -451,8 +455,8 @@ Example output:
             return {}, raw
 
         allowed_keys = {
-            "pb", "t", "d", "dc", "cv", "l", "id", "s",
-            "dp", "sd", "edp", "ed", "cd", "lu", "du", "c"
+            "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
+            "dp", "sd", "edp", "ed", "cd", "lu", "du"
         }
 
         cleaned: Dict[str, Any] = {}

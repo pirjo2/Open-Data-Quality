@@ -12,6 +12,45 @@ import pandas as pd
 # --- Turvaline tingimusavaldiste eval --- #
 COND_ALLOWED_RE = re.compile(r"^[0-9a-zA-Z_ .<>=!()+\-*/]+$")
 
+SYMBOL_HINTS: Dict[str, str] = {
+    "pb": "publisher is present",
+    "t": "title is present",
+    "d": "description is present",
+    "dc": "date of creation is present",
+    "cv": "coverage is present",
+    "l": "language is present",
+    "id": "identifier is present",
+    "s": "source is present",
+    "c": "category/theme is present",
+
+    "dp": "date of publication",
+    "sd": "start date of the covered period",
+    "edp": "end date of the covered period",
+    "ed": "expiration date or end of validity",
+    "cd": "current date or date when dataset became available again",
+
+    "lu": "list or history of updates is present, including natural-language update frequency",
+    "du": "dates of updates are explicitly present",
+
+    "ncr": "number of rows that are not current",
+    "ns": "number of columns for which a standard should apply",
+    "nsc": "number of standardized columns",
+    "ncm": "number of columns that have metadata/description",
+    "ncuf": "number of columns in comprehensible format",
+    "nce": "number of cells that are inaccurate or syntactically invalid",
+
+    "s1": "open data is available on the web",
+    "s2": "open data is machine-readable",
+    "s3": "open data is in a non-proprietary format",
+    "s4": "open data uses URIs / stable identifiers",
+    "s5": "open data is linked open data",
+
+    "sc": "scale constant used in aggregation comparison",
+    "oav": "observed aggregate value calculated from detailed data",
+    "dav": "declared aggregate value reported in the data",
+    "e": "error or difference used in aggregation accuracy",
+}
+
 
 def _safe_eval_condition(expr: str, env: Dict[str, Any]) -> bool:
     """
@@ -149,7 +188,7 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
     auto["nce"] = None
 
     # Currentness: detect a primary date column
-    date_col = None
+    '''date_col = None
     for c in df.columns:
         if "date" in str(c).lower() or "kuup" in str(c).lower():
             date_col = c
@@ -256,6 +295,52 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
     auto["dav"] = None
     auto["e"] = None
 
+    return auto'''
+        # ------------------------------------------------------------------
+    # AI-first approach:
+    # Do NOT hard-code semantic interpretation from column names here.
+    # Keep only deterministic table statistics in _auto_inputs().
+    # Semantic symbols will be inferred later from:
+    # - raw manual metadata text
+    # - Trino metadata
+    # - column profiles
+    # - sample rows
+    # ------------------------------------------------------------------
+
+    # Currentness / publication / expiration
+    auto["ncr"] = None
+    auto["sd"] = None
+    auto["edp"] = None
+    auto["ed"] = None
+    auto["cd"] = None
+    auto["dp"] = None
+    auto["du"] = None
+
+    # Standardization / understandability
+    auto["ns"] = None
+    auto["nsc"] = None
+    auto["ncm"] = None
+    auto["ncuf"] = None
+
+    # 5-star open data
+    auto["s1"] = None
+    auto["s2"] = None
+    auto["s3"] = None
+    auto["s4"] = None
+    auto["s5"] = None
+
+    # Traceability / updates
+    auto["s"] = None
+    auto["dc"] = None
+    auto["lu"] = None
+
+    # Accuracy / aggregation
+    auto["nce"] = None
+    auto["sc"] = None
+    auto["oav"] = None
+    auto["dav"] = None
+    auto["e"] = None
+
     return auto
 
 def compute_metrics(
@@ -351,7 +436,7 @@ def compute_metrics(
         if details["symbol_source"].get(sym) == "parser":
             continue
 
-        # 1) manual metadata = strongest override
+        # 1) explicit/manual metadata is strongest
         if sym in manual_metadata and manual_metadata[sym] is not None:
             val = manual_metadata[sym]
             details["symbol_values"][sym] = val
@@ -367,24 +452,26 @@ def compute_metrics(
             env[sym] = val
             continue
 
-        # 3) auto heuristics only if nothing stronger exists
+        # 3) auto inputs last
         if sym in auto_inputs and auto_inputs[sym] is not None:
-            details["symbol_values"][sym] = auto_inputs[sym]
+            val = auto_inputs[sym]
+            details["symbol_values"][sym] = val
             details["symbol_source"][sym] = "auto"
-            env[sym] = auto_inputs[sym]
+            env[sym] = val
             continue
 
         details["symbol_values"][sym] = None
         details["symbol_source"][sym] = "missing"
 
     # --------- LLM fallback (missing + auto=None refinement) ----------
-    if use_llm and llm_runner is not None and prompt_defs:
+    if use_llm and llm_runner is not None:
 
-        refinable_symbols = {
+        '''refinable_symbols = {
             "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
             "dp", "sd", "edp", "ed", "cd",
             "lu", "du"
-        }
+        }'''
+        refinable_symbols = set(required_symbols)
 
         missing_syms = []
 
@@ -447,55 +534,70 @@ def compute_metrics(
                 context_lines.append("Raw manual metadata text:")
                 context_lines.append(manual_metadata_text)
 
+            context_lines.append("")
+            context_lines.append("Sample rows (first 5):")
+            sample_rows = df.head(5).to_dict(orient="records")
+            context_lines.append(json.dumps(sample_rows, indent=2, default=str))
+
+            context_lines.append("")
+            context_lines.append("Requested symbol meanings:")
+            for sym in missing_syms:
+                if sym in SYMBOL_HINTS:
+                    context_lines.append(f"- {sym}: {SYMBOL_HINTS[sym]}")
+
             context = "\n".join(context_lines)
 
             prompt = f"""
-            You are evaluating metadata of an open dataset.
+You are evaluating metadata and table semantics for an open dataset.
 
-            Use the dataset context below and determine the values of the requested metadata symbols.
+Infer the requested Vetrò symbols from:
+- raw metadata text
+- portal metadata JSON
+- column names
+- data types
+- sample values
+- sample rows
 
-            Rules:
-            - Return ONLY valid JSON.
-            - Use only the requested symbols as keys.
-            - Presence-type symbols must be 0 or 1 only.
-            - Date-type symbols (dp, sd, edp, ed, cd) must be returned as YYYY-MM-DD only if clearly supported.
-            - If a field is not clearly supported, return 0 for presence symbols and omit unclear date fields.
-            - Be conservative and rely only on evidence in the context.
+Important:
+- Infer semantic roles from evidence, not exact keywords.
+- A temporal column may be represented by dates, months, periods, ranges, validity windows, year-month values, or other time-like formats.
+- Update information may be written in natural language.
+- Column understandability should be inferred from whether column names are human-readable and meaningful.
+- Column metadata coverage should be inferred from whether descriptive metadata for columns is present in the text.
+- Standardization should be inferred from actual values and formats, not only column names.
+- Aggregation accuracy should be inferred only when there is clear evidence that one value is a total/aggregate of others.
+- Syntactic or value accuracy should be inferred only when there is clear evidence from values or metadata constraints.
 
-            Interpretation rules:
-            - For lu (list of updates):
-            return 1 if there is evidence that updates/history/revisions/versions/frequency of updating are described,
-            even if phrased in natural language.
-            Examples: "updated weekly", "updated every Monday", "we update this dataset at the beginning of each week".
-            - For du (dates of updates):
-            return 1 only if specific update dates are given or clearly listed.
-            - For t, d, pb, cv, l, id, s, c:
-            return 1 only if the corresponding metadata field is clearly present.
-            Statements like "title is missing" or "no category provided" mean 0.
-            - For dp:
-            use publication date only, not creation date.
-            - For ed:
-            use expiration/end-of-validity date only.
-            - For cd:
-            use the date when the dataset became available again / current availability date if explicitly stated.
+Rules:
+- Return ONLY valid JSON.
+- Use only the requested symbols as keys.
+- Binary/presence symbols must be 0 or 1 only.
+- Count / numeric symbols may be integers or floats if clearly inferable.
+- Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
+- If evidence is insufficient, omit the symbol.
+- Do not invent facts.
 
-            Requested symbols:
-            {", ".join(missing_syms)}
+Requested symbols:
+{", ".join(missing_syms)}
 
-            Dataset context:
-            {context}
+Dataset context:
+{context}
 
-            Example output:
-            {{
-            "lu": 1,
-            "du": 0,
-            "t": 1,
-            "pb": 1,
-            "c": 0
-            }}
-            """
+Example output:
+{{
+  "lu": 1,
+  "du": 0,
+  "sd": "2026-01-01",
+  "edp": "2026-03-31",
+  "ncr": 4,
+  "ncm": 2,
+  "ncuf": 3,
+  "nsc": 2,
+  "ns": 3
+}}
+"""
 
-            raw = llm_runner(prompt, 256)
+            raw = llm_runner(prompt, 1024)
 
             try:
                 data = json.loads(raw)
@@ -505,7 +607,17 @@ def compute_metrics(
                 data = {}
 
             date_symbols = {"dp", "sd", "edp", "ed", "cd"}
-            presence_symbols = set(missing_syms) - date_symbols
+
+            binary_symbols = {
+                "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
+                "lu", "du",
+                "s1", "s2", "s3", "s4", "s5",
+            }
+
+            numeric_symbols = {
+                "ncr", "ns", "nsc", "ncm", "ncuf", "nce",
+                "sc", "oav", "dav", "e",
+            }
 
             # One LLM call, then distribute values to symbols
             details["llm_debug"]["calls"].append(
@@ -518,8 +630,19 @@ def compute_metrics(
             for sym in missing_syms:
                 val = data.get(sym)
 
-                if sym in presence_symbols:
-                    if val not in [0, 1]:
+                if sym in binary_symbols:
+                    if val in [0, 1]:
+                        val = float(val)
+                    else:
+                        val = None
+
+                elif sym in numeric_symbols:
+                    if isinstance(val, (int, float)):
+                        val = float(val)
+                    elif isinstance(val, str):
+                        m = re.search(r"[-+]?\d*\.?\d+", val)
+                        val = float(m.group(0)) if m else None
+                    else:
                         val = None
 
                 elif sym in date_symbols:
@@ -529,11 +652,17 @@ def compute_metrics(
                     else:
                         val = None
 
+                else:
+                    # unknown symbol type -> leave as None unless clearly numeric
+                    if isinstance(val, (int, float)):
+                        val = float(val)
+                    else:
+                        val = None
+
                 details["llm_raw"][sym] = raw
                 details["llm_confidence"][sym] = None
                 details["llm_evidence"][sym] = ""
 
-                # Do NOT override trino or manual
                 if details["symbol_source"].get(sym) in {"trino", "manual"}:
                     continue
 

@@ -461,7 +461,7 @@ if run_btn:
         manual_metadata = normalize_metadata_to_symbols(manual_metadata_raw)
 
         # uus reeglipõhine vabateksti parser
-        manual_metadata_rule = extract_symbols_from_realistic_text(manual_meta_text)
+        #manual_metadata_rule = extract_symbols_from_realistic_text(manual_meta_text)
 
         manual_metadata_llm_raw = ""
         manual_metadata_llm = {}
@@ -481,9 +481,9 @@ if run_btn:
                 pass
 
         # prioriteet:
-        # explicit key:value > rule-based text > AI
+        # AI-first:
+        # explicit key:value wins, AI fills the rest
         merged_manual_metadata = dict(manual_metadata_llm)
-        merged_manual_metadata.update(manual_metadata_rule)
         merged_manual_metadata.update(manual_metadata)
         manual_metadata = merged_manual_metadata
 
@@ -606,6 +606,7 @@ if run_btn:
                 openai_api_key=openai_api_key,
                 file_ext=ext,
                 manual_metadata=manual_metadata,
+                manual_metadata_text=manual_meta_text,
                 trino_metadata=trino_metadata if data_source == "Trino SQL query (beta)" else {},
                 trino_metadata_raw=trino_metadata_raw if data_source == "Trino SQL query (beta)" else {},
             )
