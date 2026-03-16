@@ -168,6 +168,59 @@ def _date_to_num(value: Any) -> Optional[float]:
     except Exception:
         return None
 
+def _infer_currentness_anchor(
+    df: pd.DataFrame,
+    manual_metadata_text: str,
+    llm_runner,
+) -> Tuple[Optional[str], Optional[str]]:
+    if not llm_runner or not manual_metadata_text or not manual_metadata_text.strip():
+        return None, None
+
+    sample_rows = df.head(5).to_dict(orient="records")
+
+    prompt = f"""
+Return ONLY valid JSON with these keys:
+- current_column
+- current_value
+
+Task:
+Infer which dataset column is used to evaluate whether a row is current,
+and what value represents the current reference period.
+
+Metadata text:
+{manual_metadata_text}
+
+Columns:
+{list(df.columns)}
+
+Sample rows:
+{json.dumps(sample_rows, default=str)}
+
+Rules:
+- Use only a column that actually exists in the dataset
+- current_value must be a string exactly matching the dataset format if possible
+- If uncertain, return {{}}
+"""
+
+    raw = llm_runner(prompt, 96)
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None, None
+    except Exception:
+        return None, None
+
+    col = data.get("current_column")
+    val = data.get("current_value")
+
+    if col not in df.columns:
+        return None, None
+    if val is None:
+        return None, None
+
+    return str(col), str(val)
+
 def _chunk_list(items, chunk_size):
     for i in range(0, len(items), chunk_size):
         yield items[i:i + chunk_size]
@@ -409,6 +462,22 @@ def compute_metrics(
     trino_metadata = trino_metadata or {}
     trino_metadata_raw = trino_metadata_raw or {}
 
+        # AI infers currentness semantics, code computes ncr deterministically
+    if auto_inputs.get("ncr") is None and use_llm and llm_runner is not None:
+        current_col, current_val = _infer_currentness_anchor(
+            df=df,
+            manual_metadata_text=manual_metadata_text,
+            llm_runner=llm_runner,
+        )
+
+        if current_col and current_val:
+            series = df[current_col].astype(str).str.strip()
+            ncr = float((series != current_val).sum())
+
+            details["symbol_values"]["ncr"] = ncr
+            details["symbol_source"]["ncr"] = "ai+auto"
+            env["ncr"] = ncr
+
     cov = trino_metadata_raw.get("temporalcoverage")
 
     mod_date = trino_metadata_raw.get("modificationdate")
@@ -437,7 +506,7 @@ def compute_metrics(
     }
 
     for sym in sorted(required_symbols):
-        if details["symbol_source"].get(sym) == "parser":
+        if details["symbol_source"].get(sym) in {"parser", "ai+auto"}:
             continue
 
         # 1) explicit/manual metadata is strongest
@@ -505,7 +574,7 @@ def compute_metrics(
 
         # Only now build context
         if missing_syms:
-            chunk_size = 4 if str(getattr(llm_runner, "__name__", "")).lower().find("openai") >= 0 else 6
+            chunk_size = 4
             context_lines = []
             context_lines.append("Columns:")
             context_lines.append(", ".join(str(c) for c in df.columns))
@@ -553,76 +622,55 @@ def compute_metrics(
             context = "\n".join(context_lines)
 
             all_data: Dict[str, Any] = {}
+            chunk_raw_map: Dict[str, str] = {}
 
-        for chunk in _chunk_list(missing_syms, 6):
-            prompt = f"""
-You are evaluating metadata and table semantics for an open dataset.
+            for chunk in _chunk_list(missing_syms, chunk_size):
+                prompt = f"""
+        You are evaluating metadata and table semantics for an open dataset.
 
-Infer the requested Vetrò symbols from:
-- raw metadata text
-- portal metadata JSON
-- column names
-- data types
-- sample values
-- sample rows
+        Infer the requested Vetrò symbols from:
+        - raw metadata text
+        - portal metadata JSON
+        - column names
+        - data types
+        - sample values
+        - sample rows
 
-Important:
-- Infer semantic roles from evidence, not exact keywords.
-- A temporal column may be represented by dates, months, periods, ranges, validity windows, year-month values, or other time-like formats.
-- Update information may be written in natural language.
-- Column understandability should be inferred from whether column names are human-readable and meaningful.
-- Column metadata coverage should be inferred from whether descriptive metadata for columns is present in the text.
-- Standardization should be inferred from actual values and formats, not only column names.
-- Aggregation accuracy should be inferred only when there is clear evidence that one value is a total/aggregate of others.
-- Syntactic or value accuracy should be inferred only when there is clear evidence from values or metadata constraints.
+        Rules:
+        - Return ONLY valid JSON.
+        - Use only the requested symbols as keys.
+        - Binary/presence symbols must be 0 or 1 only.
+        - Count / numeric symbols may be integers or floats if clearly inferable.
+        - Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
+        - If evidence is insufficient, omit the symbol.
+        - Do not invent facts.
 
-Rules:
-- Return ONLY valid JSON.
-- Use only the requested symbols as keys.
-- Binary/presence symbols must be 0 or 1 only.
-- Count / numeric symbols may be integers or floats if clearly inferable.
-- Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
-- If evidence is insufficient, omit the symbol.
-- Do not invent facts.
+        Requested symbols:
+        {", ".join(chunk)}
 
-Requested symbols:
-{", ".join(chunk)}
+        Dataset context:
+        {context}
+        """
 
-Dataset context:
-{context}
+                raw = llm_runner(prompt, 160)
 
-Example output:
-{{
-  "lu": 1,
-  "du": 0,
-  "sd": "2026-01-01",
-  "edp": "2026-03-31",
-  "ncr": 4,
-  "ncm": 2,
-  "ncuf": 3,
-  "nsc": 2,
-  "ns": 3
-}}
-"""
+                details["llm_debug"]["calls"].append(
+                    {
+                        "symbols": list(chunk),
+                        "raw": raw,
+                    }
+                )
 
-            raw = llm_runner(prompt, 384)
-
-            details["llm_debug"]["calls"].append(
-                {
-                    "symbols": list(chunk),
-                    "raw": raw,
-                }
-            )
-
-            try:
-                data = json.loads(raw)
-                if not isinstance(data, dict):
+                try:
+                    data = json.loads(raw)
+                    if not isinstance(data, dict):
+                        data = {}
+                except Exception:
                     data = {}
-            except Exception:
-                data = {}
 
-            for k, v in data.items():
-                all_data[k] = v
+                for k, v in data.items():
+                    all_data[k] = v
+                    chunk_raw_map[k] = raw
 
             date_symbols = {"dp", "sd", "edp", "ed", "cd"}
 
@@ -636,13 +684,6 @@ Example output:
                 "ncr", "ns", "nsc", "ncm", "ncuf", "nce",
                 "sc", "oav", "dav", "e",
             }
-
-            details["llm_debug"]["calls"].append(
-                {
-                    "symbols": list(missing_syms),
-                    "raw": raw,
-                }
-            )
 
             for sym in missing_syms:
                 val = all_data.get(sym)
@@ -675,11 +716,11 @@ Example output:
                     else:
                         val = None
 
-                details["llm_raw"][sym] = raw
+                details["llm_raw"][sym] = chunk_raw_map.get(sym, "")
                 details["llm_confidence"][sym] = None
                 details["llm_evidence"][sym] = ""
 
-                if details["symbol_source"].get(sym) in {"trino", "manual"}:
+                if details["symbol_source"].get(sym) in {"trino", "manual", "ai+auto"}:
                     continue
 
                 if val is None:
