@@ -170,8 +170,64 @@ def get_hf_runner(model_name: str) -> Callable[[str, int], str]:
 
     return runner
 
-
 def get_openai_runner(
+    model_name: str,
+    api_key: Optional[str] = None,
+    max_retries: int = 1,
+) -> Callable[[str, int], str]:
+    from openai import OpenAI
+
+    resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
+    if not resolved_api_key:
+        raise ValueError("OpenAI API key is missing.")
+
+    client = OpenAI(api_key=resolved_api_key)
+
+    def _extract_text_from_response(response) -> str:
+        text = getattr(response, "output_text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
+        try:
+            for item in getattr(response, "output", []) or []:
+                if getattr(item, "type", None) != "message":
+                    continue
+                for part in getattr(item, "content", []) or []:
+                    if getattr(part, "type", None) in {"output_text", "text"}:
+                        txt = getattr(part, "text", None)
+                        if isinstance(txt, str) and txt.strip():
+                            return txt.strip()
+        except Exception:
+            pass
+
+        return ""
+
+    def runner(prompt: str, max_new_tokens: int = 128) -> str:
+        is_gpt5_family = str(model_name).lower().startswith("gpt-5")
+
+        kwargs = {
+            "model": model_name,
+            "input": prompt.strip(),
+            "max_output_tokens": max_new_tokens,
+        }
+
+        if is_gpt5_family:
+            kwargs["reasoning"] = {"effort": "minimal"}
+            kwargs["text"] = {"verbosity": "low"}
+
+        response = client.responses.create(**kwargs)
+        text = _extract_text_from_response(response)
+        if text:
+            return text
+
+        try:
+            return f"EMPTY_OUTPUT | FULL_RESPONSE: {response.model_dump_json(indent=2)}"
+        except Exception:
+            return f"EMPTY_OUTPUT | RESPONSE_REPR: {response!r}"
+
+    return runner
+
+'''def get_openai_runner(
     model_name: str,
     api_key: Optional[str] = None,
     max_retries: int = 1,
@@ -265,7 +321,7 @@ def get_openai_runner(
 
         return f"OPENAI_ERROR: {last_error}"
 
-    return runner
+    return runner'''
 
 
 def get_llm_runner(
@@ -574,8 +630,10 @@ Text:
                 continue
 
             if k in {"dp", "sd", "edp", "ed", "cd"}:
-                if isinstance(v, str) and DATE_RE.search(v):
-                    cleaned[k] = DATE_RE.search(v).group(1)
+                if isinstance(v, str):
+                    m = re.search(r"\d{4}-\d{2}-\d{2}", v)
+                    if m:
+                        cleaned[k] = m.group(0)
                 continue
 
             if v in [0, 1]:
