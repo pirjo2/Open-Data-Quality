@@ -11,6 +11,8 @@ from core.utils import make_arrow_safe
 from core.pipeline import run_quality_assessment
 from core.llm import get_llm_runner, infer_manual_metadata_symbols
 
+import re
+
 # --- Paths --- #
 FORMULAS_YAML = "configs/formulas.yaml"
 PROMPTS_YAML = "configs/prompts.yaml"
