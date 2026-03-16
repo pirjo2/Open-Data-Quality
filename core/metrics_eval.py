@@ -266,6 +266,7 @@ def compute_metrics(
     llm_runner,
     file_ext: Optional[str] = None,
     manual_metadata: Optional[Dict[str, Any]] = None,
+    manual_metadata_text: Optional[str] = None,
     trino_metadata: Optional[Dict[str, Any]] = None,
     trino_metadata_raw: Optional[Dict[str, Any]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -315,6 +316,7 @@ def compute_metrics(
                             required_symbols.add(sym)
 
     manual_metadata = manual_metadata or {}
+    manual_metadata_text = manual_metadata_text or ""
     trino_metadata = trino_metadata or {}
     trino_metadata_raw = trino_metadata_raw or {}
 
@@ -349,14 +351,15 @@ def compute_metrics(
         if details["symbol_source"].get(sym) == "parser":
             continue
 
-        # Auto only if NOT traceability core symbols
-        # Important: auto values should only win if they are actually not None
-        if sym in auto_inputs and sym not in {"s", "dc"} and auto_inputs[sym] is not None:
-            details["symbol_values"][sym] = auto_inputs[sym]
-            details["symbol_source"][sym] = "auto"
-            env[sym] = auto_inputs[sym]
+        # 1) manual metadata = strongest user override
+        if sym in manual_metadata and manual_metadata[sym] is not None:
+            val = manual_metadata[sym]
+            details["symbol_values"][sym] = val
+            details["symbol_source"][sym] = "manual"
+            env[sym] = val
             continue
 
+        # 2) trino metadata
         if sym in trino_metadata and trino_metadata[sym] is not None:
             val = trino_metadata[sym]
             details["symbol_values"][sym] = val
@@ -364,11 +367,11 @@ def compute_metrics(
             env[sym] = val
             continue
 
-        if sym in manual_metadata and manual_metadata[sym] is not None:
-            val = manual_metadata[sym]
-            details["symbol_values"][sym] = val
-            details["symbol_source"][sym] = "manual"
-            env[sym] = val
+        # 3) auto heuristics only if nothing better exists
+        if sym in auto_inputs and auto_inputs[sym] is not None:
+            details["symbol_values"][sym] = auto_inputs[sym]
+            details["symbol_source"][sym] = "auto"
+            env[sym] = auto_inputs[sym]
             continue
 
         details["symbol_values"][sym] = None
@@ -378,16 +381,17 @@ def compute_metrics(
     if use_llm and llm_runner is not None and prompt_defs:
 
         refinable_symbols = {
-            "s", "dc", "dp", "du", "sd", "edp", "ed",
-            "cv", "l", "id", "c"
+            "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
+            "dp", "sd", "edp", "ed", "cd",
+            "lu", "du"
         }
 
         missing_syms = []
 
         # Collect symbols first
         for sym in sorted(required_symbols):
-            if sym not in prompt_defs:
-                continue
+            #if sym not in prompt_defs:
+                #continue
 
             source = details["symbol_source"].get(sym)
             val = details["symbol_values"].get(sym)
@@ -438,39 +442,58 @@ def compute_metrics(
                     json.dumps(manual_metadata, indent=2, default=str)
                 )
 
+            if manual_metadata_text.strip():
+                context_lines.append("")
+                context_lines.append("Raw manual metadata text:")
+                context_lines.append(manual_metadata_text)
+
             context = "\n".join(context_lines)
 
             prompt = f"""
-    You are evaluating metadata of an open dataset.
+            You are evaluating metadata of an open dataset.
 
-    Use the dataset context below and determine whether each requested metadata symbol is present.
+            Use the dataset context below and determine the values of the requested metadata symbols.
 
-    Rules:
-    - Return ONLY valid JSON.
-    - Use only the requested symbols as keys.
-    - For presence-type fields return only:
-    0 = missing
-    1 = present
-    - For date-type fields (dp, sd, edp, ed, cd), return YYYY-MM-DD only if clearly supported by the context.
-    - If a field is not clearly supported, return 0 for presence fields and omit unclear date fields.
-    - Never return values other than 0 or 1 for presence fields.
+            Rules:
+            - Return ONLY valid JSON.
+            - Use only the requested symbols as keys.
+            - Presence-type symbols must be 0 or 1 only.
+            - Date-type symbols (dp, sd, edp, ed, cd) must be returned as YYYY-MM-DD only if clearly supported.
+            - If a field is not clearly supported, return 0 for presence symbols and omit unclear date fields.
+            - Be conservative and rely only on evidence in the context.
 
-    Requested symbols:
-    {", ".join(missing_syms)}
+            Interpretation rules:
+            - For lu (list of updates):
+            return 1 if there is evidence that updates/history/revisions/versions are described,
+            even if phrased in natural language.
+            Examples: "updated weekly", "revised monthly", "version history available".
+            - For du (dates of updates):
+            return 1 only if specific update dates are given or clearly referenced.
+            - For t, d, pb, cv, l, id, s, c:
+            return 1 only if the corresponding metadata field is clearly present.
+            Statements like "title is missing" or "no category provided" mean 0.
+            - For dp:
+            use publication date only, not creation date.
+            - For ed:
+            use expiration/end-of-validity date only.
+            - For cd:
+            use the date when the dataset became available again / current availability date if explicitly stated.
 
-    Dataset context:
-    {context}
+            Requested symbols:
+            {", ".join(missing_syms)}
 
-    Example output:
-    {{
-    "cv": 1,
-    "dc": 0,
-    "dp": "2024-01-15",
-    "id": 1,
-    "l": 1,
-    "sd": "2022-10-03"
-    }}
-    """
+            Dataset context:
+            {context}
+
+            Example output:
+            {{
+            "lu": 1,
+            "du": 0,
+            "dp": "2024-01-15",
+            "t": 1,
+            "c": 0
+            }}
+            """
 
             raw = llm_runner(prompt, 256)
 

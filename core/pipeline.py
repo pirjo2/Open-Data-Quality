@@ -19,6 +19,7 @@ def run_quality_assessment(
     openai_api_key: Optional[str] = None,
     file_ext: Optional[str] = None,
     manual_metadata: Optional[Dict[str, Any]] = None,
+    manual_metadata_text: Optional[str] = None,
     trino_metadata: Optional[Dict[str, Any]] = None,
     trino_metadata_raw: Optional[Dict[str, Any]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -46,6 +47,7 @@ def run_quality_assessment(
         llm_runner=llm_runner,
         file_ext=file_ext,
         manual_metadata=manual_metadata or {},
+        manual_metadata_text=manual_metadata_text or "",
         trino_metadata=trino_metadata or {},
         trino_metadata_raw=trino_metadata_raw or {},
     )
