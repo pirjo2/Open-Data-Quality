@@ -57,41 +57,140 @@ def parse_kv_metadata(text: str) -> Dict[str, Any]:
             meta[k] = v
     return meta
 
+def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    low = (text or "").lower()
+
+    # ---- test 2: track of updates ----
+    if re.search(r"updates\s*:\s*\[\s*\]", low):
+        out["lu"] = 0.0
+        out["du"] = 0.0
+
+    if "update history" in low or "updated regularly" in low:
+        out["lu"] = 1.0
+
+    if re.search(r"updated on\s+\d{4}-\d{2}-\d{2}", low):
+        out["du"] = 1.0
+
+    # ---- test 4: delay in publication ----
+    m = re.search(
+        r"covers the period from\s+(20\d{2}-\d{2}-\d{2})\s+to\s+(20\d{2}-\d{2}-\d{2})",
+        low
+    )
+    if m:
+        out["sd"] = m.group(1)
+        out["edp"] = m.group(2)
+
+    m = re.search(r"published on\s+(20\d{2}-\d{2}-\d{2})", low)
+    if m:
+        out["dp"] = m.group(1)
+
+    # ---- test 5: delay after expiration ----
+    m = re.search(r"expired on\s+(20\d{2}-\d{2}-\d{2})", low)
+    if m:
+        out["ed"] = m.group(1)
+
+    m = re.search(r"became available on\s+(20\d{2}-\d{2}-\d{2})", low)
+    if m:
+        out["cd"] = m.group(1)
+
+    # ---- test 9: eGMS ----
+    if re.search(r"^title\s*:", text, re.I | re.M):
+        out["t"] = 1.0
+    elif "title is missing" in low:
+        out["t"] = 0.0
+
+    if re.search(r"^description\s*:", text, re.I | re.M):
+        out["d"] = 1.0
+    elif "description is missing" in low:
+        out["d"] = 0.0
+
+    if re.search(r"^identifier\s*:", text, re.I | re.M):
+        out["id"] = 1.0
+    elif "no identifier" in low or "identifier is missing" in low:
+        out["id"] = 0.0
+
+    if re.search(r"^publisher\s*:", text, re.I | re.M):
+        out["pb"] = 1.0
+    elif "publisher is missing" in low:
+        out["pb"] = 0.0
+
+    if re.search(r"^coverage\s*:", text, re.I | re.M):
+        out["cv"] = 1.0
+    elif "no coverage information" in low:
+        out["cv"] = 0.0
+
+    if re.search(r"^language\s*:", text, re.I | re.M):
+        out["l"] = 1.0
+    elif "language is missing" in low:
+        out["l"] = 0.0
+
+    if re.search(r"^source\s*:", text, re.I | re.M):
+        out["s"] = 1.0
+    elif "no source information" in low:
+        out["s"] = 0.0
+
+    if re.search(r"^date of creation\s*:\s*(20\d{2}-\d{2}-\d{2})", text, re.I | re.M):
+        out["dc"] = 1.0
+    elif "no creation date" in low or "creation date is missing" in low:
+        out["dc"] = 0.0
+
+    if re.search(r"^category\s*:", text, re.I | re.M):
+        out["c"] = 1.0
+    elif "no category" in low or "category is missing" in low:
+        out["c"] = 0.0
+
+    return out
 
 def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     """
     Accept either:
-      - direct symbols (pb, t, d, dc, cv, l, id, s, etc.)
-      - or common field names (publisher, title, description, metadata_created, coverage, language, identifier, source)
+      - direct symbols
+      - or common field names
     Output is a dict that can be used as symbol values.
     """
     out: Dict[str, Any] = {}
 
+    # luba rohkem otsesümboleid
+    direct_symbols = {
+        "pb", "t", "d", "dc", "cv", "l", "id", "s",
+        "dp", "sd", "edp", "ed", "cd",
+        "lu", "du", "c",
+    }
+
     for k, v in meta.items():
-        if k in {"pb", "t", "d", "dc", "cv", "l", "id", "s", "dp", "sd", "edp", "ed", "cd"}:
-            out[k] = v
+        kk = str(k).strip().lower()
+        if kk in direct_symbols:
+            out[kk] = v
+
+    def _is_missing(x: Any) -> bool:
+        if x is None:
+            return True
+        if isinstance(x, float) and pd.isna(x):
+            return True
+        if isinstance(x, str):
+            s = x.strip().lower()
+            return s in {"", "[]", "none", "null", "missing", "n/a", "na"}
+        return False
 
     def _present(x: Any) -> bool:
-        if x is None:
-            return False
-        if isinstance(x, float) and pd.isna(x):
-            return False
-        if isinstance(x, str) and not x.strip():
-            return False
-        return True
+        return not _is_missing(x)
 
     title = meta.get("title")
-    if "t" not in out and _present(title):
-        out["t"] = 1.0
+    if "t" not in out:
+        out["t"] = 0.0 if _is_missing(title) else 1.0
 
     desc = meta.get("description") or meta.get("notes")
-    if "d" not in out and _present(desc):
-        out["d"] = 1.0
+    if "d" not in out:
+        out["d"] = 0.0 if _is_missing(desc) else 1.0
 
     publisher = meta.get("publisher") or meta.get("organization") or meta.get("org_name")
-    if "pb" not in out and _present(publisher):
-        out["pb"] = 1.0
-        out["s"] = 1.0
+    if "pb" not in out:
+        out["pb"] = 0.0 if _is_missing(publisher) else 1.0
+
+    source = meta.get("source")
+    if "s" not in out:
+        out["s"] = 0.0 if _is_missing(source) else 1.0
 
     created = (
         meta.get("metadata_created")
@@ -99,37 +198,37 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
         or meta.get("created")
         or meta.get("date_of_creation")
     )
-    if "dc" not in out and _present(created):
-        out["dc"] = 1.0
+    if "dc" not in out:
+        out["dc"] = 0.0 if _is_missing(created) else 1.0
 
     coverage = meta.get("coverage")
-    if "cv" not in out and _present(coverage):
-        out["cv"] = 1.0
+    if "cv" not in out:
+        out["cv"] = 0.0 if _is_missing(coverage) else 1.0
 
     language = meta.get("language") or meta.get("lang")
-    if "l" not in out and _present(language):
-        out["l"] = 1.0
+    if "l" not in out:
+        out["l"] = 0.0 if _is_missing(language) else 1.0
 
     identifier = meta.get("identifier") or meta.get("dataset_id") or meta.get("id")
-    if "id" not in out and _present(identifier):
-        out["id"] = 1.0
+    if "id" not in out:
+        out["id"] = 0.0 if _is_missing(identifier) else 1.0
 
-    source = meta.get("source")
-    if "s" not in out and _present(source):
-        out["s"] = 1.0
+    category = meta.get("category") or meta.get("theme")
+    if "c" not in out:
+        out["c"] = 0.0 if _is_missing(category) else 1.0
 
     dp = meta.get("date_of_publication") or meta.get("metadata_modified") or meta.get("modified")
     if "dp" not in out and _present(dp):
-        out["dp"] = dp
+        out["dp"] = str(dp)
 
     updates = meta.get("updates")
-    if "lu" not in out and updates:
-        out["lu"] = 1.0
+    if "lu" not in out:
+        out["lu"] = 0.0 if _is_missing(updates) else 1.0
 
-    if "du" not in out and updates:
-        out["du"] = 1.0
+    if "du" not in out:
+        out["du"] = 0.0 if _is_missing(updates) else 1.0
 
-    return out
+    return {k: v for k, v in out.items() if v is not None}
 
 
 # --- Page config --- #
@@ -355,39 +454,37 @@ if run_btn:
         df: Optional[pd.DataFrame] = None
         ext: Optional[str] = None
         trino_metadata: Dict[str, Any] = {}
+
         manual_metadata_raw = parse_kv_metadata(manual_meta_text)
         manual_metadata = normalize_metadata_to_symbols(manual_metadata_raw)
+
+        # uus reeglipõhine vabateksti parser
+        manual_metadata_rule = extract_symbols_from_realistic_text(manual_meta_text)
 
         manual_metadata_llm_raw = ""
         manual_metadata_llm = {}
 
-        # If the manual textbox contains richer free text and the rule-based parser
-        # found very little, use LLM to interpret the metadata text.
         if use_llm and manual_meta_text.strip():
-            looks_like_free_text = (
-                len(manual_meta_text.splitlines()) > 2
-                or len(manual_meta_text) > 180
-            )
+            try:
+                manual_llm_runner = get_llm_runner(
+                    provider=llm_provider,
+                    model_name=llm_model_name,
+                    api_key=openai_api_key,
+                )
+                manual_metadata_llm, manual_metadata_llm_raw = infer_manual_metadata_symbols(
+                    manual_meta_text,
+                    manual_llm_runner,
+                )
+            except Exception:
+                pass
 
-            if looks_like_free_text and len(manual_metadata) <= 1:
-                try:
-                    manual_llm_runner = get_llm_runner(
-                        provider=llm_provider,
-                        model_name=llm_model_name,
-                        api_key=openai_api_key,
-                    )
-                    manual_metadata_llm, manual_metadata_llm_raw = infer_manual_metadata_symbols(
-                        manual_meta_text,
-                        manual_llm_runner,
-                    )
+        # prioriteet:
+        # explicit key:value > rule-based text > AI
+        merged_manual_metadata = dict(manual_metadata_llm)
+        merged_manual_metadata.update(manual_metadata_rule)
+        merged_manual_metadata.update(manual_metadata)
+        manual_metadata = merged_manual_metadata
 
-                    # Merge: explicit rule-based mapping wins, AI fills the gaps
-                    merged_manual_metadata = dict(manual_metadata_llm)
-                    merged_manual_metadata.update(manual_metadata)
-                    manual_metadata = merged_manual_metadata
-
-                except Exception:
-                    pass
         trino_metadata_raw: Dict[str, Any] = {}
 
         conn = None

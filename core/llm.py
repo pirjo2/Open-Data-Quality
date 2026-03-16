@@ -7,8 +7,7 @@ import os
 import re
 import time
 
-
-DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+DATE_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b", re.I)
 JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 ANSWER_LINE_RE = re.compile(r"(?im)^\s*answer\s*[:=]\s*(.+?)\s*$")
 CONF_LINE_RE = re.compile(r"(?im)^\s*confidence\s*[:=]\s*([0-9]*\.?[0-9]+)\s*$")
@@ -17,6 +16,91 @@ NUM_RE = re.compile(r"[-+]?\d*\.?\d+")
 YES_RE = re.compile(r"\b(yes|true|present|exists|available)\b", re.IGNORECASE)
 NO_RE = re.compile(r"\b(no|false|missing|absent|not available)\b", re.IGNORECASE)
 
+
+def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    low = text.lower()
+
+    # ---------- test 2: updates ----------
+    if re.search(r"updates\s*:\s*\[\s*\]", low):
+        out["lu"] = 0.0
+        out["du"] = 0.0
+
+    if "update history" in low or "updated regularly" in low:
+        out["lu"] = 1.0
+
+    if re.search(r"updated on\s+\d{4}-\d{2}-\d{2}", low):
+        out["du"] = 1.0
+
+    # ---------- test 4: delay in publication ----------
+    m = re.search(
+        r"covers the period from\s+(20\d{2}-\d{2}-\d{2})\s+to\s+(20\d{2}-\d{2}-\d{2})",
+        low
+    )
+    if m:
+        out["sd"] = m.group(1)
+        out["edp"] = m.group(2)
+
+    m = re.search(r"published on\s+(20\d{2}-\d{2}-\d{2})", low)
+    if m:
+        out["dp"] = m.group(1)
+
+    # ---------- test 5: delay after expiration ----------
+    m = re.search(r"expired on\s+(20\d{2}-\d{2}-\d{2})", low)
+    if m:
+        out["ed"] = m.group(1)
+
+    m = re.search(r"became available on\s+(20\d{2}-\d{2}-\d{2})", low)
+    if m:
+        out["cd"] = m.group(1)
+
+    # ---------- test 9: eGMS positive / negative statements ----------
+    if re.search(r"^title\s*:", text, re.I | re.M):
+        out["t"] = 1.0
+    elif "title is missing" in low:
+        out["t"] = 0.0
+
+    if re.search(r"^description\s*:", text, re.I | re.M):
+        out["d"] = 1.0
+    elif "description is missing" in low:
+        out["d"] = 0.0
+
+    if re.search(r"^identifier\s*:", text, re.I | re.M):
+        out["id"] = 1.0
+    elif "no identifier" in low or "identifier is missing" in low:
+        out["id"] = 0.0
+
+    if re.search(r"^publisher\s*:", text, re.I | re.M):
+        out["pb"] = 1.0
+    elif "publisher is missing" in low:
+        out["pb"] = 0.0
+
+    if re.search(r"^coverage\s*:", text, re.I | re.M):
+        out["cv"] = 1.0
+    elif "no coverage information" in low:
+        out["cv"] = 0.0
+
+    if re.search(r"^language\s*:", text, re.I | re.M):
+        out["l"] = 1.0
+    elif "language is missing" in low:
+        out["l"] = 0.0
+
+    if re.search(r"^source\s*:", text, re.I | re.M):
+        out["s"] = 1.0
+    elif "no source information" in low:
+        out["s"] = 0.0
+
+    if re.search(r"^date of creation\s*:\s*(20\d{2}-\d{2}-\d{2})", text, re.I | re.M):
+        out["dc"] = 1.0
+    elif "no creation date" in low or "creation date is missing" in low:
+        out["dc"] = 0.0
+
+    if re.search(r"^category\s*:", text, re.I | re.M):
+        out["c"] = 1.0
+    elif "no category" in low or "category is missing" in low:
+        out["c"] = 0.0
+
+    return out
 
 def _safe_format(template: str, values: Dict[str, Any]) -> str:
     class _SafeDict(dict):
@@ -328,7 +412,7 @@ Read the metadata text below and return ONLY valid JSON.
 
 Rules:
 - Use only these keys if evidence exists:
-  pb, t, d, dc, cv, l, id, s, dp, sd, edp, ed, cd, lu, du
+  pb, t, d, dc, cv, l, id, s, dp, sd, edp, ed, cd, lu, du, c
 - For presence-type fields use:
   1 = present
   0 = missing
@@ -368,7 +452,7 @@ Example output:
 
         allowed_keys = {
             "pb", "t", "d", "dc", "cv", "l", "id", "s",
-            "dp", "sd", "edp", "ed", "cd", "lu", "du"
+            "dp", "sd", "edp", "ed", "cd", "lu", "du", "c"
         }
 
         cleaned: Dict[str, Any] = {}
