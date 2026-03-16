@@ -351,7 +351,7 @@ def compute_metrics(
         if details["symbol_source"].get(sym) == "parser":
             continue
 
-        # 1) manual metadata = strongest user override
+        # 1) manual metadata = strongest override
         if sym in manual_metadata and manual_metadata[sym] is not None:
             val = manual_metadata[sym]
             details["symbol_values"][sym] = val
@@ -367,7 +367,7 @@ def compute_metrics(
             env[sym] = val
             continue
 
-        # 3) auto heuristics only if nothing better exists
+        # 3) auto heuristics only if nothing stronger exists
         if sym in auto_inputs and auto_inputs[sym] is not None:
             details["symbol_values"][sym] = auto_inputs[sym]
             details["symbol_source"][sym] = "auto"
@@ -464,11 +464,11 @@ def compute_metrics(
 
             Interpretation rules:
             - For lu (list of updates):
-            return 1 if there is evidence that updates/history/revisions/versions are described,
+            return 1 if there is evidence that updates/history/revisions/versions/frequency of updating are described,
             even if phrased in natural language.
-            Examples: "updated weekly", "revised monthly", "version history available".
+            Examples: "updated weekly", "updated every Monday", "we update this dataset at the beginning of each week".
             - For du (dates of updates):
-            return 1 only if specific update dates are given or clearly referenced.
+            return 1 only if specific update dates are given or clearly listed.
             - For t, d, pb, cv, l, id, s, c:
             return 1 only if the corresponding metadata field is clearly present.
             Statements like "title is missing" or "no category provided" mean 0.
@@ -489,8 +489,8 @@ def compute_metrics(
             {{
             "lu": 1,
             "du": 0,
-            "dp": "2024-01-15",
             "t": 1,
+            "pb": 1,
             "c": 0
             }}
             """
