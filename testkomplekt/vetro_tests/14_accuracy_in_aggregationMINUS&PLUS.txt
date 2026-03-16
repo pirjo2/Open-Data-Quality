@@ -1,1 +1,2 @@
-reported_total should equal the sum of part_a, part_b and part_c.
+For each row, reported_total must equal the sum of part_a, part_b and part_c.
+Use part_a + part_b + part_c as the observed aggregate value.

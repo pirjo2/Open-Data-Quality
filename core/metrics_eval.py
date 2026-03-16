@@ -168,6 +168,10 @@ def _date_to_num(value: Any) -> Optional[float]:
     except Exception:
         return None
 
+def _chunk_list(items, chunk_size):
+    for i in range(0, len(items), chunk_size):
+        yield items[i:i + chunk_size]
+
 
 # --- Automaatsete sisendite arvutamine --- #
 def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, Any]:
@@ -547,6 +551,9 @@ def compute_metrics(
 
             context = "\n".join(context_lines)
 
+            all_data: Dict[str, Any] = {}
+
+        for chunk in _chunk_list(missing_syms, 6):
             prompt = f"""
 You are evaluating metadata and table semantics for an open dataset.
 
@@ -578,7 +585,7 @@ Rules:
 - Do not invent facts.
 
 Requested symbols:
-{", ".join(missing_syms)}
+{", ".join(chunk)}
 
 Dataset context:
 {context}
@@ -597,7 +604,14 @@ Example output:
 }}
 """
 
-            raw = llm_runner(prompt, 1024)
+            raw = llm_runner(prompt, 384)
+
+            details["llm_debug"]["calls"].append(
+                {
+                    "symbols": list(chunk),
+                    "raw": raw,
+                }
+            )
 
             try:
                 data = json.loads(raw)
@@ -605,6 +619,9 @@ Example output:
                     data = {}
             except Exception:
                 data = {}
+
+            for k, v in data.items():
+                all_data[k] = v
 
             date_symbols = {"dp", "sd", "edp", "ed", "cd"}
 
@@ -627,7 +644,7 @@ Example output:
             )
 
             for sym in missing_syms:
-                val = data.get(sym)
+                val = all_data.get(sym)
 
                 if sym in binary_symbols:
                     if val in [0, 1]:

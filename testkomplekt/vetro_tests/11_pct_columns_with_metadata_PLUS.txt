@@ -1,4 +1,5 @@
 Columns:
-- id: row identifier
-- age_years: age in years
-- county: county name
+- id: unique row identifier
+- amount_eur: monetary amount in euros
+- date_iso: transaction date in ISO format YYYY-MM-DD
+- country_code: country code in ISO 3166-1 alpha-2 format
