@@ -184,22 +184,73 @@ def get_openai_runner(
 
     client = OpenAI(api_key=resolved_api_key)
 
-    def runner(prompt: str, max_new_tokens: int = 40) -> str:
+    def _extract_text_from_response(response) -> str:
+        # 1) easiest path
+        text = getattr(response, "output_text", None)
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
+        # 2) inspect output items
+        try:
+            for item in getattr(response, "output", []) or []:
+                if getattr(item, "type", None) != "message":
+                    continue
+                for part in getattr(item, "content", []) or []:
+                    part_type = getattr(part, "type", None)
+                    if part_type in {"output_text", "text"}:
+                        txt = getattr(part, "text", None)
+                        if isinstance(txt, str) and txt.strip():
+                            return txt.strip()
+        except Exception:
+            pass
+
+        return ""
+
+    def runner(prompt: str, max_new_tokens: int = 128) -> str:
         last_error: Optional[Exception] = None
+        compact_prompt = prompt.strip()
+
+        # GPT-5-family often burns output on reasoning unless we constrain it.
+        is_gpt5_family = str(model_name).lower().startswith("gpt-5")
 
         for attempt in range(max_retries + 1):
             try:
-                response = client.responses.create(
-                    model=model_name,
-                    input=prompt,
-                    max_output_tokens=max_new_tokens,
-                )
+                kwargs = {
+                    "model": model_name,
+                    "input": compact_prompt,
+                    "max_output_tokens": max_new_tokens,
+                }
 
-                text = getattr(response, "output_text", None)
-                if isinstance(text, str) and text.strip():
-                    return text.strip()
+                if is_gpt5_family:
+                    kwargs["reasoning"] = {"effort": "minimal"}
+                    kwargs["text"] = {"verbosity": "low"}
 
-                # Kui output_text on tühi, tagasta kogu response debugiks
+                response = client.responses.create(**kwargs)
+
+                text = _extract_text_from_response(response)
+                if text:
+                    return text
+
+                # if incomplete due to token budget, retry once with stricter prompt
+                try:
+                    status = getattr(response, "status", None)
+                    incomplete_details = getattr(response, "incomplete_details", None)
+                    reason = None
+                    if incomplete_details is not None:
+                        reason = getattr(incomplete_details, "reason", None)
+                        if reason is None and isinstance(incomplete_details, dict):
+                            reason = incomplete_details.get("reason")
+
+                    if status == "incomplete" and reason == "max_output_tokens" and attempt < max_retries:
+                        compact_prompt = (
+                            "Return ONLY a compact JSON object. "
+                            "No explanation, no markdown, no extra text.\n\n"
+                            + prompt.strip()
+                        )
+                        continue
+                except Exception:
+                    pass
+
                 try:
                     return f"EMPTY_OUTPUT | FULL_RESPONSE: {response.model_dump_json(indent=2)}"
                 except Exception:
@@ -392,7 +443,7 @@ def infer_symbol(
 
     return value, raw, confidence, evidence
 
-def infer_manual_metadata_symbols(
+'''def infer_manual_metadata_symbols(
     text: str,
     llm_runner,
 ) -> Tuple[Dict[str, Any], str]:
@@ -446,6 +497,64 @@ Example output:
 
     try:
         raw = llm_runner(prompt, 256)
+    except Exception as e:
+        return {}, f"LLM_ERROR: {e}"
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {}, raw
+
+        allowed_keys = {
+            "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
+            "dp", "sd", "edp", "ed", "cd", "lu", "du"
+        }
+
+        cleaned: Dict[str, Any] = {}
+        for k, v in data.items():
+            if k not in allowed_keys:
+                continue
+
+            if k in {"dp", "sd", "edp", "ed", "cd"}:
+                if isinstance(v, str) and DATE_RE.search(v):
+                    cleaned[k] = DATE_RE.search(v).group(1)
+                continue
+
+            if v in [0, 1]:
+                cleaned[k] = float(v)
+
+        return cleaned, raw
+
+    except Exception:
+        return {}, raw'''
+def infer_manual_metadata_symbols(
+    text: str,
+    llm_runner,
+) -> Tuple[Dict[str, Any], str]:
+    if not llm_runner or not text or not text.strip():
+        return {}, ""
+
+    prompt = f"""
+Extract Vetrò metadata symbols from the text below.
+
+Return ONLY valid JSON.
+Allowed keys:
+pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
+
+Rules:
+- Presence keys -> 0 or 1
+- Date keys -> YYYY-MM-DD only
+- Natural-language update frequency counts as lu=1
+- du=1 only if update dates are explicitly given
+- If uncertain, omit the key
+- No explanation
+
+Text:
+{text}
+"""
+
+    try:
+        raw = llm_runner(prompt, 96)
     except Exception as e:
         return {}, f"LLM_ERROR: {e}"
 

@@ -505,6 +505,7 @@ def compute_metrics(
 
         # Only now build context
         if missing_syms:
+            chunk_size = 4 if str(getattr(llm_runner, "__name__", "")).lower().find("openai") >= 0 else 6
             context_lines = []
             context_lines.append("Columns:")
             context_lines.append(", ".join(str(c) for c in df.columns))

@@ -503,6 +503,12 @@ if run_btn:
                     manual_meta_text,
                     manual_llm_runner,
                 )
+
+                # explicit key:value wins, AI fills gaps
+                merged_manual_metadata = dict(manual_metadata_llm)
+                merged_manual_metadata.update(manual_metadata)
+                manual_metadata = merged_manual_metadata
+
             except Exception:
                 pass
 
