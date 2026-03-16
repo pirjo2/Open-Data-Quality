@@ -619,7 +619,6 @@ Example output:
                 "sc", "oav", "dav", "e",
             }
 
-            # One LLM call, then distribute values to symbols
             details["llm_debug"]["calls"].append(
                 {
                     "symbols": list(missing_syms),
@@ -653,7 +652,6 @@ Example output:
                         val = None
 
                 else:
-                    # unknown symbol type -> leave as None unless clearly numeric
                     if isinstance(val, (int, float)):
                         val = float(val)
                     else:

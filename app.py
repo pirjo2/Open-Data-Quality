@@ -146,89 +146,115 @@ def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
 
 def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Accept either:
-      - direct symbols
-      - or common field names
-    Output is a dict that can be used as symbol values.
+    AI-friendly normalizer:
+    - explicit key:value overrides are kept
+    - missing key != explicit 0
+    - 0 is used only when the value explicitly indicates absence
     """
     out: Dict[str, Any] = {}
 
-    # luba rohkem otsesümboleid
+    # lowercase keys first
+    meta_l = {str(k).strip().lower(): v for k, v in (meta or {}).items()}
+
     direct_symbols = {
-        "pb", "t", "d", "dc", "cv", "l", "id", "s",
+        "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
         "dp", "sd", "edp", "ed", "cd",
-        "lu", "du", "c",
+        "lu", "du",
     }
 
-    for k, v in meta.items():
-        kk = str(k).strip().lower()
-        if kk in direct_symbols:
-            out[kk] = v
+    for k, v in meta_l.items():
+        if k in direct_symbols:
+            out[k] = v
 
-    def _is_missing(x: Any) -> bool:
+    def _is_explicit_missing(x: Any) -> bool:
         if x is None:
             return True
         if isinstance(x, float) and pd.isna(x):
             return True
         if isinstance(x, str):
             s = x.strip().lower()
-            return s in {"", "[]", "none", "null", "missing", "n/a", "na"}
+            return s in {
+                "", "none", "null", "missing", "n/a", "na", "[]",
+                "not provided", "not available"
+            }
         return False
 
-    def _present(x: Any) -> bool:
-        return not _is_missing(x)
+    def _presence_from_key(meta_dict: Dict[str, Any], *keys: str) -> Optional[float]:
+        for key in keys:
+            if key in meta_dict:
+                return 0.0 if _is_explicit_missing(meta_dict[key]) else 1.0
+        return None  # key absent -> let AI decide
 
-    title = meta.get("title")
+    # semantic presence fields
     if "t" not in out:
-        out["t"] = 0.0 if _is_missing(title) else 1.0
+        v = _presence_from_key(meta_l, "title")
+        if v is not None:
+            out["t"] = v
 
-    desc = meta.get("description") or meta.get("notes")
     if "d" not in out:
-        out["d"] = 0.0 if _is_missing(desc) else 1.0
+        v = _presence_from_key(meta_l, "description", "notes")
+        if v is not None:
+            out["d"] = v
 
-    publisher = meta.get("publisher") or meta.get("organization") or meta.get("org_name")
     if "pb" not in out:
-        out["pb"] = 0.0 if _is_missing(publisher) else 1.0
+        v = _presence_from_key(meta_l, "publisher", "organization", "org_name")
+        if v is not None:
+            out["pb"] = v
 
-    source = meta.get("source")
     if "s" not in out:
-        out["s"] = 0.0 if _is_missing(source) else 1.0
+        v = _presence_from_key(meta_l, "source")
+        if v is not None:
+            out["s"] = v
 
-    created = (
-        meta.get("metadata_created")
-        or meta.get("issued")
-        or meta.get("created")
-        or meta.get("date_of_creation")
-    )
     if "dc" not in out:
-        out["dc"] = 0.0 if _is_missing(created) else 1.0
+        v = _presence_from_key(meta_l, "metadata_created", "issued", "created", "date_of_creation")
+        if v is not None:
+            out["dc"] = v
 
-    coverage = meta.get("coverage")
     if "cv" not in out:
-        out["cv"] = 0.0 if _is_missing(coverage) else 1.0
+        v = _presence_from_key(meta_l, "coverage")
+        if v is not None:
+            out["cv"] = v
 
-    language = meta.get("language") or meta.get("lang")
     if "l" not in out:
-        out["l"] = 0.0 if _is_missing(language) else 1.0
+        v = _presence_from_key(meta_l, "language", "lang")
+        if v is not None:
+            out["l"] = v
 
-    identifier = meta.get("identifier") or meta.get("dataset_id") or meta.get("id")
     if "id" not in out:
-        out["id"] = 0.0 if _is_missing(identifier) else 1.0
+        v = _presence_from_key(meta_l, "identifier", "dataset_id", "id")
+        if v is not None:
+            out["id"] = v
 
-    category = meta.get("category") or meta.get("theme")
     if "c" not in out:
-        out["c"] = 0.0 if _is_missing(category) else 1.0
+        v = _presence_from_key(meta_l, "category", "theme")
+        if v is not None:
+            out["c"] = v
 
-    dp = meta.get("date_of_publication") or meta.get("metadata_modified") or meta.get("modified")
-    if "dp" not in out and _present(dp):
-        out["dp"] = str(dp)
+    # date-like fields: only pass through if key exists
+    if "dp" not in out and "date_of_publication" in meta_l:
+        out["dp"] = str(meta_l["date_of_publication"])
+    if "dp" not in out and "metadata_modified" in meta_l:
+        out["dp"] = str(meta_l["metadata_modified"])
+    if "dp" not in out and "modified" in meta_l:
+        out["dp"] = str(meta_l["modified"])
 
-    updates = meta.get("updates")
-    if "lu" not in out:
-        out["lu"] = 0.0 if _is_missing(updates) else 1.0
+    if "sd" not in out and "sd" in meta_l:
+        out["sd"] = str(meta_l["sd"])
+    if "edp" not in out and "edp" in meta_l:
+        out["edp"] = str(meta_l["edp"])
+    if "ed" not in out and "ed" in meta_l:
+        out["ed"] = str(meta_l["ed"])
+    if "cd" not in out and "cd" in meta_l:
+        out["cd"] = str(meta_l["cd"])
 
-    if "du" not in out:
-        out["du"] = 0.0 if _is_missing(updates) else 1.0
+    # updates: only set if explicit structured key exists
+    if "lu" not in out and "updates" in meta_l:
+        out["lu"] = 0.0 if _is_explicit_missing(meta_l["updates"]) else 1.0
+
+    if "du" not in out and "updates" in meta_l:
+        # explicit update list/history key alone does NOT guarantee dated updates
+        out["du"] = 0.0 if _is_explicit_missing(meta_l["updates"]) else None
 
     return {k: v for k, v in out.items() if v is not None}
 

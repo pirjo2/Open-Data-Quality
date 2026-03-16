@@ -1,4 +1,4 @@
-customer_id,order_date,total_amount
+c_id,dt2,amt_x
 1,2026-02-01,1
 2,2026-02-02,10
 3,2026-02-03,3

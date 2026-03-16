@@ -1,1 +1,2 @@
-updates: []
+Update schedule is not specified.
+No change history is provided.

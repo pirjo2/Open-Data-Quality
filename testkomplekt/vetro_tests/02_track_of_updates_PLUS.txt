@@ -1,4 +1,4 @@
-The dataset is updated regularly.
+This dataset is updated every Monday.
 Update history:
-- version 1.0, updated on 2026-01-15
-- version 1.1, updated on 2026-02-10
+- updated on 2026-01-15
+- updated on 2026-02-10
