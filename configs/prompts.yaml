@@ -136,29 +136,29 @@ prompt_regimes:
 
       Text:
       {text}
-
+      
     currentness_anchor: |
-    Return ONLY valid JSON with these keys:
-    - current_column
-    - current_value
+      Return ONLY valid JSON with these keys:
+      - current_column
+      - current_value
 
-    Task:
-    Infer which dataset column is used to evaluate whether a row is current,
-    and what value represents the current reference period.
+      Task:
+      Infer which dataset column is used to evaluate whether a row is current,
+      and what value represents the current reference period.
 
-    Rules:
-    - Use only a column that actually exists in the dataset
-    - current_value must match the dataset format if possible
-    - If uncertain, return {}
+      Rules:
+      - Use only a column that actually exists in the dataset
+      - current_value must match the dataset format if possible
+      - If uncertain, return {{}}
 
-    Metadata text:
-    {manual_metadata_text}
+      Metadata text:
+      {manual_metadata_text}
 
-    Columns:
-    {columns}
+      Columns:
+      {columns}
 
-    Sample rows:
-    {sample_rows}
+      Sample rows:
+      {sample_rows}
 
   few_shot:
     manual_metadata_extraction: |
@@ -168,15 +168,15 @@ prompt_regimes:
 
       Example:
       Text: This dataset is updated every Monday.
-      Output: {"lu": 1}
+      Output: {{"lu": 1}}
 
       Example:
       Text: Category is missing.
-      Output: {"c": 0}
+      Output: {{"c": 0}}
 
       Example:
       Text: Published on 2025-01-15.
-      Output: {"dp": "2025-01-15"}
+      Output: {{"dp": "2025-01-15"}}
 
       Allowed keys:
       pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
@@ -191,27 +191,27 @@ prompt_regimes:
       {text}
 
     currentness_anchor: |
-    Return ONLY valid JSON with these keys:
-    - current_column
-    - current_value
+      Return ONLY valid JSON with these keys:
+      - current_column
+      - current_value
 
-    Example:
-    Metadata: The current reference period for this dataset is 2026-03. The time variable is stored in column record_period.
-    Output: {"current_column": "record_period", "current_value": "2026-03"}
+      Example:
+      Metadata: The current reference period for this dataset is 2026-03. The time variable is stored in column record_period.
+      Output: {{"current_column": "record_period", "current_value": "2026-03"}}
 
-    Rules:
-    - Use only a column that actually exists in the dataset
-    - current_value must match the dataset format if possible
-    - If uncertain, return {}
+      Rules:
+      - Use only a column that actually exists in the dataset
+      - current_value must match the dataset format if possible
+      - If uncertain, return {{}}
 
-    Metadata text:
-    {manual_metadata_text}
+      Metadata text:
+      {manual_metadata_text}
 
-    Columns:
-    {columns}
+      Columns:
+      {columns}
 
-    Sample rows:
-    {sample_rows}
+      Sample rows:
+      {sample_rows}
 
   reasoning:
     manual_metadata_extraction: |
@@ -234,24 +234,24 @@ prompt_regimes:
       Text:
       {text}
     currentness_anchor: |
-    Infer conservatively which dataset column is used to determine whether a row is current,
-    and what value should be treated as the current reference period.
+      Infer conservatively which dataset column is used to determine whether a row is current,
+      and what value should be treated as the current reference period.
 
-    Return ONLY valid JSON with these keys:
-    - current_column
-    - current_value
+      Return ONLY valid JSON with these keys:
+      - current_column
+      - current_value
 
-    Rules:
-    - Use only a column that actually exists in the dataset
-    - current_value must match the dataset format if possible
-    - Do not invent facts
-    - If uncertain, return {}
+      Rules:
+      - Use only a column that actually exists in the dataset
+      - current_value must match the dataset format if possible
+      - Do not invent facts
+      - If uncertain, return {{}}
 
-    Metadata text:
-    {manual_metadata_text}
+      Metadata text:
+      {manual_metadata_text}
 
-    Columns:
-    {columns}
+      Columns:
+      {columns}
 
-    Sample rows:
-  {sample_rows}
+      Sample rows:
+      {sample_rows}
