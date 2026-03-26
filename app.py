@@ -265,8 +265,8 @@ def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
     """
     Parse optional metadata files in TXT / JSON / YAML format.
     Returns:
-      - parsed raw metadata dict
-      - original text content for optional LLM interpretation
+      - parsed metadata dict
+      - original text content
     """
     if uploaded is None:
         return {}, ""
@@ -287,32 +287,34 @@ def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
 
     return parse_kv_metadata(text_content), text_content
 
+def humanize_dimension(value: str) -> str:
+    return str(value).replace("_", " ").strip().title()
 
 def build_quality_recommendations(metrics_df: pd.DataFrame) -> List[str]:
     if metrics_df.empty:
         return []
 
     guidance = {
-        "traceability.track_of_creation": "Add clear source information and the dataset or metadata creation date.",
-        "traceability.track_of_updates": "Document update history and include explicit update dates or a regular update schedule.",
-        "currentness.percentage_of_current_rows": "Review the time-related columns and remove or flag rows that refer to outdated periods.",
-        "currentness.delay_in_publication": "Publish data closer to the end of the reference period and document the publication date consistently.",
-        "currentness.delay_after_expiration": "Refresh or archive expired datasets faster so they do not remain outdated for long.",
-        "completeness.percentage_of_complete_cells": "Reduce missing values in key columns and use consistent placeholders only when they are truly needed.",
-        "completeness.percentage_of_complete_rows": "Focus on row-level completeness for the most important records before publication.",
-        "compliance.percentage_of_standardized_columns": "Use standardised formats, codes, and controlled vocabularies where possible.",
-        "compliance.egms_compliance": "Improve metadata completeness by adding title, description, publisher, identifier, language, category, source, and coverage.",
-        "compliance.five_stars_open_data": "Publish the dataset in a machine-readable non-proprietary format and add persistent identifiers or links where relevant.",
-        "understandability.percentage_of_columns_with_metadata": "Add a column-level data dictionary so every field has a clear description.",
-        "understandability.percentage_of_columns_in_comprehensible_format": "Rename cryptic columns, explain abbreviations, and use human-readable value formats.",
-        "accuracy.percentage_of_syntactically_accurate_cells": "Validate dates, numeric fields, and code formats before publication to reduce syntax errors.",
-        "accuracy.accuracy_in_aggregation": "Cross-check totals and aggregates against row-level values to ensure calculations are internally consistent.",
+        "traceability.track_of_creation": "Add a clear data source and an explicit creation date in the metadata.",
+        "traceability.track_of_updates": "Add update dates or a simple change log to document dataset updates.",
+        "currentness.percentage_of_current_rows": "Review time-related rows and clearly separate current and outdated records.",
+        "currentness.delay_in_publication": "Publish the dataset closer to the end of the reference period and include a publication date.",
+        "currentness.delay_after_expiration": "Refresh, archive, or replace expired datasets faster.",
+        "completeness.percentage_of_complete_cells": "Reduce missing values in key fields before publication.",
+        "completeness.percentage_of_complete_rows": "Improve row-level completeness for the most important records.",
+        "compliance.percentage_of_standardized_columns": "Use standardised formats, identifiers, and code lists where possible.",
+        "compliance.egms_compliance": "Add richer metadata such as title, description, publisher, identifier, language, category, source, and coverage.",
+        "compliance.five_stars_open_data": "Prefer machine-readable non-proprietary formats and publish reusable linked identifiers where relevant.",
+        "understandability.percentage_of_columns_with_metadata": "Add a column-level data dictionary or field descriptions.",
+        "understandability.percentage_of_columns_in_comprehensible_format": "Rename unclear columns and explain abbreviations or coded values.",
+        "accuracy.percentage_of_syntactically_accurate_cells": "Validate date, code, and numeric formats before publishing.",
+        "accuracy.accuracy_in_aggregation": "Cross-check totals and aggregates against row-level values.",
     }
 
     low_metrics = (
         metrics_df.dropna(subset=["value_clamped"])
         .sort_values("value_clamped", ascending=True)
-        .head(4)
+        .head(5)
     )
 
     recommendations: List[str] = []
@@ -341,12 +343,11 @@ Dataset source mode: {data_source}
 Weakest metrics:
 {yaml.safe_dump(weakest, sort_keys=False, allow_unicode=True)}
 
-Write exactly 4 short markdown bullet points.
+Write exactly 5 short markdown bullet points.
 Each bullet must:
 - explain what to improve
 - be concrete and actionable
-- mention metadata and/or content quality when relevant
-- stay under 28 words
+- stay under 24 words
 
 Do not mention confidence.
 Do not mention that you are an AI.
@@ -362,13 +363,76 @@ st.markdown(
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
+        max-width: 1200px;
     }
     .hero-card {
-        padding: 1.4rem 1.6rem;
-        border: 1px solid rgba(49, 51, 63, 0.16);
-        border-radius: 20px;
-        background: linear-gradient(135deg, rgba(244,246,255,0.95), rgba(250,250,250,0.98));
+        padding: 1.35rem 1.6rem;
+        border: 1px solid rgba(49, 51, 63, 0.14);
+        border-radius: 22px;
+        background: linear-gradient(135deg, rgba(245,247,252,0.95), rgba(250,250,250,0.98));
+        margin-bottom: 1.2rem;
+    }
+    .hero-top {
+        font-size: 0.95rem;
+        font-weight: 700;
+        opacity: 0.8;
+        margin-bottom: 0.35rem;
+    }
+    .hero-title {
+        font-size: 2.15rem;
+        font-weight: 800;
+        margin-bottom: 0.8rem;
+        line-height: 1.15;
+    }
+    .hero-text {
+        font-size: 1.02rem;
+        line-height: 1.65;
+        margin-bottom: 0.85rem;
+    }
+    .hero-meta {
+        font-size: 0.95rem;
+        line-height: 1.6;
+        opacity: 0.92;
+    }
+    .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.85rem;
+        margin-top: 0.4rem;
         margin-bottom: 1rem;
+    }
+    .kpi-card {
+        border: 1px solid rgba(49, 51, 63, 0.12);
+        border-radius: 18px;
+        padding: 0.95rem 1rem;
+        background: #ffffff;
+    }
+    .kpi-label {
+        font-size: 0.88rem;
+        opacity: 0.75;
+        margin-bottom: 0.45rem;
+    }
+    .kpi-value {
+        font-size: 1.95rem;
+        font-weight: 800;
+        line-height: 1.15;
+        word-break: break-word;
+    }
+    .kpi-sub {
+        margin-top: 0.35rem;
+        font-size: 0.92rem;
+        opacity: 0.8;
+    }
+    .soft-card {
+        border: 1px solid rgba(49, 51, 63, 0.12);
+        border-radius: 18px;
+        padding: 1rem 1.1rem;
+        background: #ffffff;
+    }
+    @media (max-width: 900px) {
+        .kpi-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
     }
     </style>
     """,
@@ -378,17 +442,18 @@ st.markdown(
 st.markdown(
     """
     <div class="hero-card">
-        <div style="font-size: 0.95rem; font-weight: 600; opacity: 0.8;">
-            Bachelor's thesis prototype
-        </div>
-        <div style="font-size: 2.1rem; font-weight: 800; margin-top: 0.15rem;">
-            Open Data Quality Assessment
-        </div>
-        <div style="font-size: 1.03rem; margin-top: 0.65rem; line-height: 1.55;">
-            This tool was developed in the context of a bachelor's thesis and evaluates open datasets
+        <div class="hero-top">Master’s thesis prototype</div>
+        <div class="hero-title">Open Data Quality Assessment</div>
+        <div class="hero-text">
+            Developed as part of a Master’s thesis at the University of Tartu, this tool evaluates open datasets
             using the Vetrò et al. (2016) quality framework adapted for an AI-assisted workflow.
-            In practice, the app combines table-based checks, optional metadata, and AI-assisted
-            inference for metadata signals that cannot be derived reliably from structure alone.
+            In practice, the application combines table-based checks, optional metadata, and AI-assisted
+            inference for signals that cannot be derived reliably from structure alone.
+        </div>
+        <div class="hero-meta">
+            <strong>Author:</strong> Pirjo Vainjärv<br>
+            <strong>Supervisor:</strong> Kristo Raun<br>
+            <strong>Special thanks:</strong> JUSTDIGI
         </div>
     </div>
     """,
@@ -403,114 +468,104 @@ data_source = st.radio(
     horizontal=True,
 )
 
-source_col1, source_col2 = st.columns(2)
-with source_col1:
+if data_source == UPLOAD_MODE:
     st.markdown("#### File upload")
     st.caption("Recommended for most users. Upload a CSV or Excel dataset and optionally enrich it with metadata.")
-with source_col2:
-    st.markdown("#### Trino SQL query")
-    st.caption("Advanced mode for users who already have Trino access and want to query both data and metadata.")
-
-if data_source == UPLOAD_MODE:
     st.info(
         "Logic: upload a table → derive structural signals → merge optional metadata → optionally use AI for semantic gaps → compute Vetrò-based scores."
     )
-
-    col_settings1, col_settings2, col_settings3 = st.columns(3)
-    with col_settings1:
-        row_limit = st.number_input(
-            "Row limit (0 = all rows)",
-            min_value=0,
-            value=500_000,
-            step=10_000,
-            help="Used only in file mode.",
-        )
-    with col_settings2:
-        use_llm = st.checkbox("Use AI to infer missing metadata", value=True)
-    with col_settings3:
-        llm_provider = st.selectbox(
-            "AI provider",
-            options=["huggingface", "openai"],
-            index=0,
-            disabled=not use_llm,
-        )
 else:
+    st.markdown("#### Trino SQL query")
+    st.caption("Advanced mode for users who already have Trino access and want to query both data and metadata.")
     st.info(
         "Logic: run a Trino data query → optionally fetch metadata with a second query → merge signals → optionally use AI for semantic gaps → compute Vetrò-based scores."
     )
 
-    row_limit = 0
-    col_settings1, col_settings2 = st.columns(2)
-    with col_settings1:
-        use_llm = st.checkbox("Use AI to infer missing metadata", value=True)
-    with col_settings2:
-        llm_provider = st.selectbox(
-            "AI provider",
-            options=["huggingface", "openai"],
-            index=0,
-            disabled=not use_llm,
-        )
-
-# Extra provider settings
+use_llm = True
+llm_provider = "openai"
 llm_model_name = ""
 openai_api_key: Optional[str] = None
 prompt_regime = "zero_shot"
 
-if use_llm:
-    if llm_provider == "huggingface":
-        llm_model_name = st.selectbox(
-            "Hugging Face model",
-            options=HF_MODEL_OPTIONS,
-            index=0,
-        )
+with st.expander("Advanced AI settings", expanded=False):
+    adv_col1, adv_col2, adv_col3 = st.columns(3)
 
-    elif llm_provider == "openai":
-        col_openai1, col_openai2 = st.columns(2)
-
-        with col_openai1:
-            openai_model_preset = st.selectbox(
-                "OpenAI model",
-                options=OPENAI_MODEL_OPTIONS,
-                index=0,
-                help="Choose a preset or override it with a custom model name below.",
+    with adv_col1:
+        if data_source == UPLOAD_MODE:
+            row_limit = st.number_input(
+                "Row limit (0 = all rows)",
+                min_value=0,
+                value=500_000,
+                step=10_000,
+                help="Used only in file mode.",
             )
-
-        with col_openai2:
-            custom_openai_model = st.text_input(
-                "Custom OpenAI model name (optional)",
-                value="",
-                placeholder="e.g. gpt-5 or another model ID",
-            )
-
-        llm_model_name = custom_openai_model.strip() or openai_model_preset
-
-        prompt_regime = st.selectbox(
-            "Prompting strategy",
-            options=["zero_shot", "few_shot", "reasoning"],
-            index=0,
-            help="Controls which prompt template family is used when a YAML prompt is available.",
-        )
-
-        openai_api_key = st.text_input(
-            "OpenAI API key",
-            type="password",
-            value="",
-            help="Used only for this session unless you store it in Streamlit secrets or environment variables.",
-        )
-
-        if not openai_api_key:
-            try:
-                openai_api_key = st.secrets.get("OPENAI_API_KEY", "")
-            except Exception:
-                openai_api_key = ""
-
-        if not openai_api_key:
-            openai_api_key = os.getenv("OPENAI_API_KEY", "")
-
-        if openai_api_key:
-            st.caption("OpenAI API key detected.")
         else:
-            st.caption("No OpenAI API key detected yet.")
+            row_limit = 0
+            st.caption("Row limit is controlled by your SQL query in Trino mode.")
+
+    with adv_col2:
+        use_llm = st.checkbox("Use AI to infer missing metadata", value=True)
+
+    with adv_col3:
+        llm_provider = st.selectbox(
+            "AI provider",
+            options=["huggingface", "openai"],
+            index=1,
+            disabled=not use_llm,
+        )
+
+    if use_llm:
+        if llm_provider == "huggingface":
+            llm_model_name = st.selectbox(
+                "Hugging Face model",
+                options=HF_MODEL_OPTIONS,
+                index=0,
+            )
+        elif llm_provider == "openai":
+            ai_col1, ai_col2 = st.columns(2)
+            with ai_col1:
+                openai_model_preset = st.selectbox(
+                    "OpenAI model",
+                    options=OPENAI_MODEL_OPTIONS,
+                    index=0,
+                    help="Choose a preset or override it with a custom model name below.",
+                )
+            with ai_col2:
+                custom_openai_model = st.text_input(
+                    "Custom OpenAI model name (optional)",
+                    value="",
+                    placeholder="e.g. gpt-5 or another model ID",
+                )
+
+            llm_model_name = custom_openai_model.strip() or openai_model_preset
+
+            prompt_regime = st.selectbox(
+                "Prompting strategy",
+                options=["zero_shot", "few_shot", "reasoning"],
+                index=0,
+                help="Controls which prompt template family is used when a YAML prompt is available.",
+            )
+
+            openai_api_key = st.text_input(
+                "OpenAI API key",
+                type="password",
+                value="",
+                help="Used only for this session unless you store it in Streamlit secrets or environment variables.",
+            )
+
+            if not openai_api_key:
+                try:
+                    openai_api_key = st.secrets.get("OPENAI_API_KEY", "")
+                except Exception:
+                    openai_api_key = ""
+
+            if not openai_api_key:
+                openai_api_key = os.getenv("OPENAI_API_KEY", "")
+
+            if openai_api_key:
+                st.caption("OpenAI API key detected.")
+            else:
+                st.caption("No OpenAI API key detected yet.")
 
 # -------------------------------------------------------------------
 # 2A. File upload UI
@@ -583,12 +638,12 @@ Optionally, you can also run a separate metadata query that returns one row.
 
 st.subheader("3) Optional metadata")
 
-meta_col1, meta_col2 = st.columns([1.7, 1])
+meta_col1, meta_col2 = st.columns([1.8, 1.05])
 
 with meta_col1:
     manual_meta_text = st.text_area(
         "Manual metadata (key: value per line)",
-        height=160,
+        height=155,
         help=(
             "You can provide either Vetrò symbols or common names.\n\n"
             "Symbols example:\n"
@@ -612,7 +667,6 @@ with meta_col2:
     if manual_meta_file is not None:
         manual_meta_file_raw, manual_meta_file_text = parse_uploaded_metadata_file(manual_meta_file)
         st.caption(f"Loaded metadata file: {manual_meta_file.name}")
-
 # -------------------------------------------------------------------
 # 3. Run button
 # -------------------------------------------------------------------
@@ -664,7 +718,7 @@ if run_btn:
         manual_metadata_llm_raw = ""
         manual_metadata_llm = {}
 
-        if use_llm and manual_meta_text.strip():
+        if use_llm and combined_manual_meta_text.strip():
             try:
                 manual_llm_runner = get_llm_runner(
                     provider=llm_provider,
@@ -777,8 +831,8 @@ if run_btn:
                 except Exception as e:
                     st.warning(f"Metadata query failed (continuing without it): {e}")
 
-            if not trino_metadata_raw:
-                trino_metadata_raw = manual_metadata_raw
+            #if not trino_metadata_raw:
+            #    trino_metadata_raw = manual_metadata_raw
 
         # -----------------------
         # Sanity check
@@ -788,18 +842,6 @@ if run_btn:
             st.stop()
 
         df = make_arrow_safe(df)
-
-        # Preview
-        st.subheader("Preview of the dataset")
-        for col in df.columns:
-            if df[col].dtype == "object":
-                df[col] = df[col].apply(
-                    lambda x: str(x) if isinstance(x, (dict, list, tuple)) else x
-                )
-
-        st.dataframe(df.head(20), width="stretch")
-        st.caption(f"{df.shape[0]} rows × {df.shape[1]} columns used for metrics.")
-
         if ext is None:
             ext = ".table"
 
@@ -816,7 +858,7 @@ if run_btn:
                 openai_api_key=openai_api_key,
                 file_ext=ext,
                 manual_metadata=manual_metadata,
-                manual_metadata_text=manual_meta_text,
+                manual_metadata_text=combined_manual_meta_text,
                 trino_metadata=trino_metadata if data_source == TRINO_MODE else {},
                 trino_metadata_raw=trino_metadata_raw if data_source == TRINO_MODE else {},
             )
@@ -824,6 +866,16 @@ if run_btn:
         metrics_df["value"] = metrics_df["value"].apply(
             lambda x: float(x) if isinstance(x, (int, float)) else None
         )
+
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].apply(
+                    lambda x: str(x) if isinstance(x, (dict, list, tuple)) else x
+                )
+
+        st.subheader("Preview of the dataset")
+        st.dataframe(df.head(20), use_container_width=True)
+        st.caption(f"{len(df)} rows × {len(df.columns)} columns used for metrics.")
 
         st.subheader("Results overview")
 
@@ -844,134 +896,142 @@ if run_btn:
             weakest_dimension = dimension_scores.iloc[-1]
             weakest_metric = metrics_non_null.sort_values("value_clamped", ascending=True).iloc[0]
 
-            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-            kpi1.metric("Overall score", f"{overall_score:.2f}")
-            kpi2.metric("Best dimension", str(best_dimension["dimension"]), f"{best_dimension['value_clamped']:.2f}")
-            kpi3.metric("Lowest dimension", str(weakest_dimension["dimension"]), f"{weakest_dimension['value_clamped']:.2f}")
-            kpi4.metric("Lowest metric", str(weakest_metric["metric_label"]), f"{weakest_metric['value_clamped']:.2f}")
-
-            st.subheader("Average score by dimension")
-            dim_fig = px.bar(
-                dimension_scores,
-                x="dimension",
-                y="value_clamped",
-                range_y=[0, 1],
-                labels={
-                    "dimension": "Dimension",
-                    "value_clamped": "Average normalised value (0–1)",
-                },
-            )
-            st.plotly_chart(dim_fig, width="stretch")
-
-            st.subheader("Metric-level results")
-            fig = px.bar(
-                metrics_non_null,
-                x="metric_label",
-                y="value_clamped",
-                color="dimension",
-                range_y=[0, 1],
-                labels={
-                    "metric_label": "Metric",
-                    "value_clamped": "Normalised value (0–1)",
-                    "dimension": "Dimension",
-                },
-            )
-            fig.update_layout(xaxis_tickangle=-35)
-            st.plotly_chart(fig, width="stretch")
-
-            st.dataframe(
-                metrics_non_null[["dimension", "metric_label", "value", "metric_id"]]
-                .sort_values(["dimension", "metric_id"]),
-                width="stretch",
+            st.markdown(
+                f"""
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-label">Overall score</div>
+                        <div class="kpi-value">{overall_score:.2f}</div>
+                        <div class="kpi-sub">Average normalised score</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">Strongest dimension</div>
+                        <div class="kpi-value">{humanize_dimension(best_dimension["dimension"])}</div>
+                        <div class="kpi-sub">Score: {best_dimension["value_clamped"]:.2f}</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">Weakest dimension</div>
+                        <div class="kpi-value">{humanize_dimension(weakest_dimension["dimension"])}</div>
+                        <div class="kpi-sub">Score: {weakest_dimension["value_clamped"]:.2f}</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="kpi-label">Lowest metric</div>
+                        <div class="kpi-value">{weakest_metric["metric_label"]}</div>
+                        <div class="kpi-sub">Score: {weakest_metric["value_clamped"]:.2f}</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-            st.subheader("Suggested next improvements")
+            left_col, right_col = st.columns([1.15, 0.95], gap="large")
 
-            ai_recommendations = ""
-            if use_llm:
-                try:
-                    reco_runner = get_llm_runner(
-                        provider=llm_provider,
-                        model_name=llm_model_name,
-                        api_key=openai_api_key,
-                    )
-                    ai_recommendations = reco_runner(
-                        build_ai_recommendation_prompt(metrics_non_null, data_source),
-                        350,
-                    ).strip()
-                except Exception:
-                    ai_recommendations = ""
+            with left_col:
+                st.markdown("### Average score by dimension")
+                dim_fig = px.bar(
+                    dimension_scores.sort_values("value_clamped", ascending=True),
+                    x="value_clamped",
+                    y="dimension",
+                    orientation="h",
+                    range_x=[0, 1],
+                    labels={
+                        "dimension": "Dimension",
+                        "value_clamped": "Average normalised value (0–1)",
+                    },
+                )
+                dim_fig.update_layout(height=360)
+                st.plotly_chart(dim_fig, use_container_width=True)
 
-            if ai_recommendations:
-                st.markdown(ai_recommendations)
-            else:
-                fallback_recommendations = build_quality_recommendations(metrics_non_null)
-                if fallback_recommendations:
-                    for item in fallback_recommendations:
-                        st.markdown(f"- {item}")
-                else:
-                    st.caption("No specific recommendations were generated.")
+            with right_col:
+                st.markdown("### Suggested next improvements")
+
+                ai_recommendations = ""
+                if use_llm:
+                    try:
+                        reco_runner = get_llm_runner(
+                            provider=llm_provider,
+                            model_name=llm_model_name,
+                            api_key=openai_api_key,
+                        )
+                        ai_recommendations = reco_runner(
+                            build_ai_recommendation_prompt(metrics_non_null, data_source),
+                            350,
+                        ).strip()
+                    except Exception:
+                        ai_recommendations = ""
+
+                with st.container(border=True):
+                    if ai_recommendations:
+                        st.markdown(ai_recommendations)
+                    else:
+                        fallback_recommendations = build_quality_recommendations(metrics_non_null)
+                        if fallback_recommendations:
+                            for item in fallback_recommendations:
+                                st.markdown(f"- {item}")
+                        else:
+                            st.caption("No specific recommendations were generated.")
+
+            with st.expander("Show metric-level chart", expanded=False):
+                metric_fig = px.bar(
+                    metrics_non_null.sort_values(["dimension", "metric_label"]),
+                    x="value_clamped",
+                    y="metric_label",
+                    color="dimension",
+                    orientation="h",
+                    range_x=[0, 1],
+                    labels={
+                        "metric_label": "Metric",
+                        "value_clamped": "Normalised value (0–1)",
+                        "dimension": "Dimension",
+                    },
+                )
+                metric_fig.update_layout(height=580)
+                st.plotly_chart(metric_fig, use_container_width=True)
+
+            with st.expander("Show detailed metric table", expanded=False):
+                st.dataframe(
+                    metrics_non_null[["dimension", "metric_label", "value", "metric_id"]]
+                    .sort_values(["dimension", "metric_id"]),
+                    use_container_width=True,
+                )
         # Debug
-        st.write("LLM calls:", len(details.get("llm_debug", {}).get("calls", [])))        
-        st.markdown("**Manual metadata prompt source:**")
-        st.write(manual_metadata_prompt_source)
-        st.markdown("**Prompt sources:**")
-        st.json(details.get("prompt_sources", {}))
-        with st.expander("Debug: auto-derived inputs and AI/metadata inferences"):
-            st.markdown("**Auto-derived inputs (from the table only):**")
-            st.json(details.get("auto_inputs", {}))
+        with st.expander("Technical details for debugging", expanded=False):
+            st.markdown("**Auto-derived inputs / inferred symbols:**")
+            st.json(details.get("raw_inputs", {}))
+
+            st.markdown("**Metric evaluation details:**")
+            st.dataframe(metrics_df, use_container_width=True)
+
+            st.markdown("**Prompt regime used:**")
+            st.write(prompt_regime)
+
+            st.markdown("**LLM calls:**")
+            st.write(len(details.get("llm_debug", {}).get("calls", [])))
+
+            st.markdown("**Manual metadata prompt source:**")
+            st.write(manual_metadata_prompt_source)
+
+            st.markdown("**Manual metadata (raw):**")
+            st.json(manual_metadata_raw)
+
+            st.markdown("**Manual metadata (normalised to symbols):**")
+            st.json(manual_metadata)
 
             if data_source == TRINO_MODE:
                 st.markdown("**Trino metadata (normalised to symbols):**")
                 st.json(trino_metadata)
 
-            st.markdown("**Manual metadata (normalised to symbols):**")
-            st.json(manual_metadata)
-            if manual_metadata_llm:
-                st.markdown("**Manual metadata interpreted by AI:**")
-                st.json(manual_metadata_llm)
-
             if manual_metadata_llm_raw:
-                st.markdown("**Manual metadata AI raw output:**")
-                st.code(manual_metadata_llm_raw, language="json")
+                st.markdown("**Manual metadata LLM raw output:**")
+                st.code(manual_metadata_llm_raw)
 
-            st.markdown("**LLM debug info:**")
-            st.json(details.get("llm_debug", {}))
-
-            st.markdown("**LLM raw outputs:**")
-            st.json(details.get("llm_raw", {}))
-
-            st.markdown("**LLM confidences:**")
-            st.json(details.get("llm_confidence", {}))
-
-            st.markdown("**LLM evidence:**")
-            st.json(details.get("llm_evidence", {}))
-
-            symbol_values = details.get("symbol_values", {})
-            if not symbol_values:
-                st.write("No symbol debug information available.")
-            else:
-                src = details.get("symbol_source", {})
-                conf = details.get("llm_confidence", {})
-                evid = details.get("llm_evidence", {})
-                rows = []
-                for sym in sorted(symbol_values.keys()):
-                    rows.append(
-                        {
-                            "symbol": sym,
-                            "value": symbol_values.get(sym),
-                            "source": src.get(sym, ""),
-                            "llm_confidence": conf.get(sym),
-                            "llm_evidence": evid.get(sym, ""),
-                        }
-                    )
-
-                debug_df = pd.DataFrame(rows)
-                debug_df["value"] = debug_df["value"].astype(str)
-                debug_df["llm_confidence"] = pd.to_numeric(debug_df["llm_confidence"], errors="coerce")
-                debug_df["llm_evidence"] = debug_df["llm_evidence"].astype(str)
-
-                st.dataframe(debug_df, width="stretch")
-
-    except Exception as e:
-        st.exception(e)
+            llm_calls = details.get("llm_debug", {}).get("calls", [])
+            if llm_calls:
+                st.markdown("**LLM call details:**")
+                st.json(llm_calls)
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
