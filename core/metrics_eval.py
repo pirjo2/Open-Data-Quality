@@ -4,7 +4,7 @@ from typing import Any, Dict, Tuple, Optional
 
 import math
 import re
-from datetime import date as _date_type
+#from datetime import date as _date_type
 import json
 
 import pandas as pd
@@ -193,7 +193,7 @@ and what value represents the current reference period.
 Rules:
 - Use only a column that actually exists in the dataset
 - current_value must match the dataset format if possible
-- If uncertain, return {}
+- If uncertain, return {{}}
 
 Metadata text:
 {manual_metadata_text}
@@ -237,59 +237,6 @@ Sample rows:
 
     return str(col), str(val), prompt_source
 
-'''def _infer_currentness_anchor(
-    df: pd.DataFrame,
-    manual_metadata_text: str,
-    llm_runner,
-) -> Tuple[Optional[str], Optional[str]]:
-    if not llm_runner or not manual_metadata_text or not manual_metadata_text.strip():
-        return None, None
-
-    sample_rows = df.head(5).to_dict(orient="records")
-
-    prompt = f"""
-Return ONLY valid JSON with these keys:
-- current_column
-- current_value
-
-Task:
-Infer which dataset column is used to evaluate whether a row is current,
-and what value represents the current reference period.
-
-Metadata text:
-{manual_metadata_text}
-
-Columns:
-{list(df.columns)}
-
-Sample rows:
-{json.dumps(sample_rows, default=str)}
-
-Rules:
-- Use only a column that actually exists in the dataset
-- current_value must be a string exactly matching the dataset format if possible
-- If uncertain, return {{}}
-"""
-
-    raw = llm_runner(prompt, 96)
-
-    try:
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return None, None
-    except Exception:
-        return None, None
-
-    col = data.get("current_column")
-    val = data.get("current_value")
-
-    if col not in df.columns:
-        return None, None
-    if val is None:
-        return None, None
-
-    return str(col), str(val)
-'''
 def _chunk_list(items, chunk_size):
     for i in range(0, len(items), chunk_size):
         yield items[i:i + chunk_size]
@@ -311,117 +258,8 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
     auto["nir"] = float(na_mask.any(axis=1).sum())
 
     # Accuracy: simple baseline
-    auto["nce"] = None
 
     # Currentness: detect a primary date column
-    '''date_col = None
-    for c in df.columns:
-        if "date" in str(c).lower() or "kuup" in str(c).lower():
-            date_col = c
-            break
-
-    if date_col is not None:
-        dt_series = pd.to_datetime(df[date_col], errors="coerce", utc=True)
-        if dt_series.notna().any():
-            sd = dt_series.min().date()
-            edp = dt_series.max().date()
-            auto["sd_col"] = str(date_col)
-            auto["sd"] = sd.isoformat()
-            auto["edp"] = edp.isoformat()
-            auto["max_date"] = edp.isoformat()
-            auto["ed"] = edp.isoformat()  # expiration ≈ previous end of period
-            auto["ncr"] = float((dt_series != dt_series.max()).sum())
-
-    auto["cd"] = _date_type.today().isoformat()
-
-    # Publication / update dates from typical columns like ModifiedAt
-    mod_col = None
-    for c in df.columns:
-        cl = str(c).lower()
-        if cl in ("modifiedat", "modified_at", "updatedat", "updated_at", "lastmodified", "last_modified"):
-            mod_col = c
-            break
-
-    if mod_col is not None:
-        dtm = pd.to_datetime(df[mod_col], errors="coerce", utc=True)
-        if dtm.notna().any():
-            dp = dtm.max().date()
-            auto["dp"] = dp.isoformat()
-            auto["du"] = 1.0
-
-    if "dp" not in auto and "max_date" in auto:
-        auto["dp"] = auto["max_date"]
-
-    # Standardised columns
-    def _infer_ns_nsc(df2: pd.DataFrame) -> Tuple[Optional[float], Optional[float]]:
-        ns = 0.0
-        nsc = 0.0
-        for col in df2.columns:
-            lname = str(col).lower()
-            s = df2[col].dropna()
-            if s.empty:
-                continue
-
-            is_candidate = False
-            is_standardised = False
-
-            if "date" in lname or "kuup" in lname:
-                is_candidate = True
-                dt2 = pd.to_datetime(s, errors="coerce", utc=True)
-                if dt2.notna().mean() > 0.9:
-                    is_standardised = True
-            elif "year" in lname or "aasta" in lname:
-                is_candidate = True
-                vals = pd.to_numeric(s, errors="coerce")
-                if vals.notna().mean() > 0.9 and vals.between(1900, 2100).mean() > 0.9:
-                    is_standardised = True
-            elif any(tok in lname for tok in ("ehak", "iso", "code", "kood")):
-                is_candidate = True
-                is_standardised = True
-            elif any(tok in lname for tok in ("country", "county", "commune", "region", "maakond", "vald", "linn")):
-                is_candidate = True
-
-            if is_candidate:
-                ns += 1.0
-                if is_standardised:
-                    nsc += 1.0
-
-        if ns == 0:
-            return None, None
-        return ns, nsc
-
-    ns, nsc = _infer_ns_nsc(df)
-    if ns is not None:
-        auto["ns"] = ns
-    if nsc is not None:
-        auto["nsc"] = nsc
-
-    # Understandability heuristics
-    auto["ncm"] = float(N)
-    auto["ncuf"] = float(N)
-
-    # 5-star open data heuristics
-    ext = (file_ext or "").lower()
-    auto["s1"] = 1.0
-    auto["s2"] = 1.0
-    auto["s3"] = 1.0 if ext in (".csv", ".tsv", ".json", ".xml") else 0.5
-    cols_lower = [str(c).lower() for c in df.columns]
-    auto["s4"] = 1.0 if any(("id" in c or "uuid" in c or "uri" in c) for c in cols_lower) else 0.0
-    auto["s5"] = None
-
-    # Traceability proxies
-    auto["s"] = 1.0 if ("dp" in auto or "sd" in auto) else None
-    auto["dc"] = 1.0 if "dp" in auto else None
-
-    auto["lu"] = None
-
-    # Aggregation accuracy defaults
-    auto["sc"] = 1.0
-    auto["oav"] = None
-    auto["dav"] = None
-    auto["e"] = None
-
-    return auto'''
         # ------------------------------------------------------------------
     # AI-first approach:
     # Do NOT hard-code semantic interpretation from column names here.
@@ -579,6 +417,7 @@ def compute_metrics(
         "use_llm": use_llm,
         "llm_runner_available": llm_runner is not None,
         "prompt_defs_available": bool(prompt_defs),
+        "prompt_regimes_available": bool(prompts_cfg.get("prompt_regimes", {})),
         "required_symbols": sorted(required_symbols),
     }
 
@@ -821,158 +660,6 @@ Dataset context:
                     details["symbol_source"][sym] = "llm"
                     details["symbol_values"][sym] = val
                     env[sym] = val
-'''
-
-            for chunk in _chunk_list(missing_syms, chunk_size):
-                fallback_prompt = """
-        You are evaluating metadata and table semantics for an open dataset.
-
-        Infer the requested Vetrò symbols from:
-        - raw metadata text
-        - portal metadata JSON
-        - column names
-        - data types
-        - sample values
-        - sample rows
-
-        Rules:
-        - Return ONLY valid JSON.
-        - Use only the requested symbols as keys.
-        - Binary/presence symbols must be 0 or 1 only.
-        - Count / numeric symbols may be integers or floats if clearly inferable.
-        - Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
-        - If evidence is insufficient, omit the symbol.
-        - Do not invent facts.
-
-        Requested symbols:
-        {requested_symbols}
-
-        Dataset context:
-        {context}
-        """
-
-            prompt_template, prompt_source = get_prompt_template_with_fallback(
-                prompts_cfg=prompts_cfg,
-                regime=prompt_regime,
-                prompt_name="semantic_metric_inference",
-                fallback_template=fallback_prompt,
-            )
-
-            details["prompt_sources"]["semantic_metric_inference"] = prompt_source
-            for chunk in _chunk_list(missing_syms, chunk_size):
-                prompt = prompt_template.format(
-                    requested_symbols=", ".join(chunk),
-                    context=context,
-                )
-                
-''''''
-prompt = f"""
-        You are evaluating metadata and table semantics for an open dataset.
-
-        Infer the requested Vetrò symbols from:
-        - raw metadata text
-        - portal metadata JSON
-        - column names
-        - data types
-        - sample values
-        - sample rows
-
-        Rules:
-        - Return ONLY valid JSON.
-        - Use only the requested symbols as keys.
-        - Binary/presence symbols must be 0 or 1 only.
-        - Count / numeric symbols may be integers or floats if clearly inferable.
-        - Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
-        - If evidence is insufficient, omit the symbol.
-        - Do not invent facts.
-
-        Requested symbols:
-        {", ".join(chunk)}
-
-        Dataset context:
-        {context}
-        """
-''''''
-
-                raw = llm_runner(prompt, 160)
-
-                details["llm_debug"]["calls"].append(
-                    {
-                        "symbols": list(chunk),
-                        "raw": raw,
-                    }
-                )
-
-                try:
-                    data = json.loads(raw)
-                    if not isinstance(data, dict):
-                        data = {}
-                except Exception:
-                    data = {}
-
-                for k, v in data.items():
-                    all_data[k] = v
-                    chunk_raw_map[k] = raw
-
-            date_symbols = {"dp", "sd", "edp", "ed", "cd"}
-
-            binary_symbols = {
-                "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
-                "lu", "du",
-                "s1", "s2", "s3", "s4", "s5",
-            }
-
-            numeric_symbols = {
-                "ncr", "ns", "nsc", "ncm", "ncuf", "nce",
-                "sc", "oav", "dav", "e",
-            }
-
-            for sym in missing_syms:
-                val = all_data.get(sym)
-
-                if sym in binary_symbols:
-                    if val in [0, 1]:
-                        val = float(val)
-                    else:
-                        val = None
-
-                elif sym in numeric_symbols:
-                    if isinstance(val, (int, float)):
-                        val = float(val)
-                    elif isinstance(val, str):
-                        m = re.search(r"[-+]?\d*\.?\d+", val)
-                        val = float(m.group(0)) if m else None
-                    else:
-                        val = None
-
-                elif sym in date_symbols:
-                    if isinstance(val, str):
-                        m = re.search(r"\d{4}-\d{2}-\d{2}", val)
-                        val = m.group(0) if m else None
-                    else:
-                        val = None
-
-                else:
-                    if isinstance(val, (int, float)):
-                        val = float(val)
-                    else:
-                        val = None
-
-                details["llm_raw"][sym] = chunk_raw_map.get(sym, "")
-                details["llm_confidence"][sym] = None
-                details["llm_evidence"][sym] = ""
-
-                if details["symbol_source"].get(sym) in {"trino", "manual", "ai+auto"}:
-                    continue
-
-                if val is None:
-                    details["symbol_source"][sym] = "llm_fail"
-                    env.setdefault(sym, 0.0)
-                else:
-                    details["symbol_source"][sym] = "llm"
-                    details["symbol_values"][sym] = val
-                    env[sym] = val
-                    
     # Convert date-like symbols into numeric
     for sym in ("sd", "edp", "ed", "cd", "dp"):
         raw_val = details["symbol_values"].get(sym, auto_inputs.get(sym))
@@ -1006,6 +693,7 @@ prompt = f"""
                     interms = [x for x in interm if isinstance(x, dict)]
                 else:
                     interms = []
+
                 for ic in interms:
                     name = ic.get("assign")
                     expr = ic.get("expression")
@@ -1049,4 +737,3 @@ prompt = f"""
 
     metrics_df = pd.DataFrame(rows)
     return metrics_df, details
-'''
