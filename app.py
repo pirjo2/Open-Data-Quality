@@ -912,7 +912,8 @@ if run_btn:
                 else:
                     st.caption("No specific recommendations were generated.")
         # Debug
-        st.write("LLM calls:", len(details.get("llm_debug", {}).get("calls", [])))        st.markdown("**Manual metadata prompt source:**")
+        st.write("LLM calls:", len(details.get("llm_debug", {}).get("calls", [])))        
+        st.markdown("**Manual metadata prompt source:**")
         st.write(manual_metadata_prompt_source)
         st.markdown("**Prompt sources:**")
         st.json(details.get("prompt_sources", {}))
