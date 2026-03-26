@@ -701,8 +701,172 @@ def compute_metrics(
             all_data: Dict[str, Any] = {}
             chunk_raw_map: Dict[str, str] = {}
 
+            fallback_prompt = """
+You are evaluating metadata and table semantics for an open dataset.
+
+Infer the requested Vetrò symbols from:
+- raw metadata text
+- portal metadata JSON
+- column names
+- data types
+- sample values
+- sample rows
+
+Rules:
+- Return ONLY valid JSON.
+- Use only the requested symbols as keys.
+- Binary/presence symbols must be 0 or 1 only.
+- Count / numeric symbols may be integers or floats if clearly inferable.
+- Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
+- If evidence is insufficient, omit the symbol.
+- Do not invent facts.
+
+Requested symbols:
+{requested_symbols}
+
+Dataset context:
+{context}
+"""
+
+            prompt_template, prompt_source = get_prompt_template_with_fallback(
+                prompts_cfg=prompts_cfg,
+                regime=prompt_regime,
+                prompt_name="semantic_metric_inference",
+                fallback_template=fallback_prompt,
+            )
+
+            details["prompt_sources"]["semantic_metric_inference"] = prompt_source
+
             for chunk in _chunk_list(missing_syms, chunk_size):
-                prompt = f"""
+                prompt = prompt_template.format(
+                    requested_symbols=", ".join(chunk),
+                    context=context,
+                )
+
+                raw = llm_runner(prompt, 160)
+
+                details["llm_debug"]["calls"].append(
+                    {
+                        "symbols": list(chunk),
+                        "raw": raw,
+                    }
+                )
+
+                try:
+                    data = json.loads(raw)
+                    if not isinstance(data, dict):
+                        data = {}
+                except Exception:
+                    data = {}
+
+                for k, v in data.items():
+                    all_data[k] = v
+                    chunk_raw_map[k] = raw
+
+            date_symbols = {"dp", "sd", "edp", "ed", "cd"}
+
+            binary_symbols = {
+                "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
+                "lu", "du",
+                "s1", "s2", "s3", "s4", "s5",
+            }
+
+            numeric_symbols = {
+                "ncr", "ns", "nsc", "ncm", "ncuf", "nce",
+                "sc", "oav", "dav", "e",
+            }
+
+            for sym in missing_syms:
+                val = all_data.get(sym)
+
+                if sym in binary_symbols:
+                    if val in [0, 1]:
+                        val = float(val)
+                    else:
+                        val = None
+
+                elif sym in numeric_symbols:
+                    if isinstance(val, (int, float)):
+                        val = float(val)
+                    elif isinstance(val, str):
+                        m = re.search(r"[-+]?\d*\.?\d+", val)
+                        val = float(m.group(0)) if m else None
+                    else:
+                        val = None
+
+                elif sym in date_symbols:
+                    if isinstance(val, str):
+                        m = re.search(r"\d{4}-\d{2}-\d{2}", val)
+                        val = m.group(0) if m else None
+                    else:
+                        val = None
+
+                else:
+                    if isinstance(val, (int, float)):
+                        val = float(val)
+                    else:
+                        val = None
+
+                details["llm_raw"][sym] = chunk_raw_map.get(sym, "")
+                details["llm_confidence"][sym] = None
+                details["llm_evidence"][sym] = ""
+
+                if details["symbol_source"].get(sym) in {"trino", "manual", "ai+auto"}:
+                    continue
+
+                if val is None:
+                    details["symbol_source"][sym] = "llm_fail"
+                    env.setdefault(sym, 0.0)
+                else:
+                    details["symbol_source"][sym] = "llm"
+                    details["symbol_values"][sym] = val
+                    env[sym] = val
+'''
+
+            for chunk in _chunk_list(missing_syms, chunk_size):
+                fallback_prompt = """
+        You are evaluating metadata and table semantics for an open dataset.
+
+        Infer the requested Vetrò symbols from:
+        - raw metadata text
+        - portal metadata JSON
+        - column names
+        - data types
+        - sample values
+        - sample rows
+
+        Rules:
+        - Return ONLY valid JSON.
+        - Use only the requested symbols as keys.
+        - Binary/presence symbols must be 0 or 1 only.
+        - Count / numeric symbols may be integers or floats if clearly inferable.
+        - Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
+        - If evidence is insufficient, omit the symbol.
+        - Do not invent facts.
+
+        Requested symbols:
+        {requested_symbols}
+
+        Dataset context:
+        {context}
+        """
+
+            prompt_template, prompt_source = get_prompt_template_with_fallback(
+                prompts_cfg=prompts_cfg,
+                regime=prompt_regime,
+                prompt_name="semantic_metric_inference",
+                fallback_template=fallback_prompt,
+            )
+
+            details["prompt_sources"]["semantic_metric_inference"] = prompt_source
+            for chunk in _chunk_list(missing_syms, chunk_size):
+                prompt = prompt_template.format(
+                    requested_symbols=", ".join(chunk),
+                    context=context,
+                )
+                
+''''''
+prompt = f"""
         You are evaluating metadata and table semantics for an open dataset.
 
         Infer the requested Vetrò symbols from:
@@ -728,6 +892,7 @@ def compute_metrics(
         Dataset context:
         {context}
         """
+''''''
 
                 raw = llm_runner(prompt, 160)
 
@@ -884,3 +1049,4 @@ def compute_metrics(
 
     metrics_df = pd.DataFrame(rows)
     return metrics_df, details
+'''

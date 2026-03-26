@@ -119,139 +119,98 @@ symbols:
       evidence: mention clues used
 prompt_regimes:
   zero_shot:
-    manual_metadata_extraction: |
-      Extract Vetrò metadata symbols from the text below.
+    semantic_metric_inference: |
+      You are evaluating metadata and table semantics for an open dataset.
 
-      Return ONLY valid JSON.
-      Allowed keys:
-      pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
-
-      Rules:
-      - Presence keys must be 0 or 1
-      - Date keys must be in YYYY-MM-DD format
-      - Natural-language update frequency counts as lu=1
-      - du=1 only if update dates are explicitly given
-      - If uncertain, omit the key
-      - No explanation, no markdown
-
-      Text:
-      {text}
-      
-    currentness_anchor: |
-      Return ONLY valid JSON with these keys:
-      - current_column
-      - current_value
-
-      Task:
-      Infer which dataset column is used to evaluate whether a row is current,
-      and what value represents the current reference period.
+      Infer the requested Vetrò symbols from:
+      - raw metadata text
+      - portal metadata JSON
+      - column names
+      - data types
+      - sample values
+      - sample rows
 
       Rules:
-      - Use only a column that actually exists in the dataset
-      - current_value must match the dataset format if possible
-      - If uncertain, return {{}}
+      - Return ONLY valid JSON.
+      - Use only the requested symbols as keys.
+      - Binary/presence symbols must be 0 or 1 only.
+      - Count / numeric symbols may be integers or floats if clearly inferable.
+      - Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
+      - If evidence is insufficient, omit the symbol.
+      - Do not invent facts.
 
-      Metadata text:
-      {manual_metadata_text}
+      Requested symbols:
+      {requested_symbols}
 
-      Columns:
-      {columns}
-
-      Sample rows:
-      {sample_rows}
+      Dataset context:
+      {context}
 
   few_shot:
-    manual_metadata_extraction: |
-      Extract Vetrò metadata symbols from the text below.
+    semantic_metric_inference: |
+      You are evaluating metadata and table semantics for an open dataset.
 
       Return ONLY valid JSON.
 
       Example:
-      Text: This dataset is updated every Monday.
-      Output: {{"lu": 1}}
-
-      Example:
-      Text: Category is missing.
-      Output: {{"c": 0}}
-
-      Example:
-      Text: Published on 2025-01-15.
-      Output: {{"dp": "2025-01-15"}}
-
-      Allowed keys:
-      pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
-
-      Rules:
-      - Presence keys must be 0 or 1
-      - Date keys must be in YYYY-MM-DD format
-      - If uncertain, omit the key
-      - No explanation, no markdown
-
-      Text:
-      {text}
-
-    currentness_anchor: |
-      Return ONLY valid JSON with these keys:
-      - current_column
-      - current_value
-
-      Example:
-      Metadata: The current reference period for this dataset is 2026-03. The time variable is stored in column record_period.
-      Output: {{"current_column": "record_period", "current_value": "2026-03"}}
-
-      Rules:
-      - Use only a column that actually exists in the dataset
-      - current_value must match the dataset format if possible
-      - If uncertain, return {{}}
-
-      Metadata text:
-      {manual_metadata_text}
-
+      Requested symbols:
+      ncm, ncuf
+      Dataset context:
       Columns:
-      {columns}
+      age_years, temperature_c
+      Raw manual metadata text:
+      Columns:
+      - age_years: age in years
+      Output:
+      {{"ncm": 1, "ncuf": 2}}
 
-      Sample rows:
-      {sample_rows}
+      Example:
+      Requested symbols:
+      lu, du
+      Dataset context:
+      Raw manual metadata text:
+      This dataset is updated every Monday.
+      Output:
+      {{"lu": 1}}
+
+      Rules:
+      - Use only the requested symbols as keys.
+      - Binary/presence symbols must be 0 or 1 only.
+      - Count / numeric symbols may be integers or floats if clearly inferable.
+      - Date symbols must be YYYY-MM-DD only.
+      - If uncertain, omit the symbol.
+      - No explanation, no markdown.
+
+      Requested symbols:
+      {requested_symbols}
+
+      Dataset context:
+      {context}
 
   reasoning:
-    manual_metadata_extraction: |
-      Extract Vetrò metadata symbols conservatively from the text below.
+    semantic_metric_inference: |
+      You are evaluating metadata and table semantics for an open dataset.
 
-      Infer meaning from natural language, but do not invent facts.
+      Infer the requested Vetrò symbols conservatively from:
+      - raw metadata text
+      - portal metadata JSON
+      - column names
+      - data types
+      - sample values
+      - sample rows
 
-      Return ONLY valid JSON.
-      Allowed keys:
-      pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
-
-      Rules:
-      - Presence keys must be 0 or 1
-      - Date keys must be in YYYY-MM-DD format
-      - Natural-language update frequency counts as lu=1
-      - du=1 only if update dates are explicitly given
-      - If uncertain, omit the key
-      - No explanation, no markdown
-
-      Text:
-      {text}
-    currentness_anchor: |
-      Infer conservatively which dataset column is used to determine whether a row is current,
-      and what value should be treated as the current reference period.
-
-      Return ONLY valid JSON with these keys:
-      - current_column
-      - current_value
+      Reason carefully about semantic roles, but do not invent facts.
 
       Rules:
-      - Use only a column that actually exists in the dataset
-      - current_value must match the dataset format if possible
-      - Do not invent facts
-      - If uncertain, return {{}}
+      - Return ONLY valid JSON.
+      - Use only the requested symbols as keys.
+      - Binary/presence symbols must be 0 or 1 only.
+      - Count / numeric symbols may be integers or floats if clearly inferable.
+      - Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
+      - If evidence is insufficient, omit the symbol.
+      - No explanation, no markdown.
 
-      Metadata text:
-      {manual_metadata_text}
+      Requested symbols:
+      {requested_symbols}
 
-      Columns:
-      {columns}
-
-      Sample rows:
-      {sample_rows}
+      Dataset context:
+      {context}
