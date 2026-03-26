@@ -117,3 +117,73 @@ symbols:
       answer: 1 if language is clear, otherwise 0
       confidence: number between 0 and 1
       evidence: mention clues used
+prompt_regimes:
+  zero_shot:
+    manual_metadata_extraction: |
+      Extract Vetrò metadata symbols from the text below.
+
+      Return ONLY valid JSON.
+      Allowed keys:
+      pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
+
+      Rules:
+      - Presence keys must be 0 or 1
+      - Date keys must be in YYYY-MM-DD format
+      - Natural-language update frequency counts as lu=1
+      - du=1 only if update dates are explicitly given
+      - If uncertain, omit the key
+      - No explanation, no markdown
+
+      Text:
+      {text}
+
+  few_shot:
+    manual_metadata_extraction: |
+      Extract Vetrò metadata symbols from the text below.
+
+      Return ONLY valid JSON.
+
+      Example:
+      Text: This dataset is updated every Monday.
+      Output: {"lu": 1}
+
+      Example:
+      Text: Category is missing.
+      Output: {"c": 0}
+
+      Example:
+      Text: Published on 2025-01-15.
+      Output: {"dp": "2025-01-15"}
+
+      Allowed keys:
+      pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
+
+      Rules:
+      - Presence keys must be 0 or 1
+      - Date keys must be in YYYY-MM-DD format
+      - If uncertain, omit the key
+      - No explanation, no markdown
+
+      Text:
+      {text}
+
+  reasoning:
+    manual_metadata_extraction: |
+      Extract Vetrò metadata symbols conservatively from the text below.
+
+      Infer meaning from natural language, but do not invent facts.
+
+      Return ONLY valid JSON.
+      Allowed keys:
+      pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
+
+      Rules:
+      - Presence keys must be 0 or 1
+      - Date keys must be in YYYY-MM-DD format
+      - Natural-language update frequency counts as lu=1
+      - du=1 only if update dates are explicitly given
+      - If uncertain, omit the key
+      - No explanation, no markdown
+
+      Text:
+      {text}

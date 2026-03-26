@@ -12,6 +12,7 @@ from core.pipeline import run_quality_assessment
 from core.llm import get_llm_runner, infer_manual_metadata_symbols
 
 import re
+import yaml
 
 # --- Paths --- #
 FORMULAS_YAML = "configs/formulas.yaml"
@@ -315,6 +316,7 @@ with col_settings3:
 # Extra provider settings
 llm_model_name = ""
 openai_api_key: Optional[str] = None
+prompt_regime = "zero_shot"
 
 if use_llm:
     if llm_provider == "huggingface":
@@ -343,6 +345,13 @@ if use_llm:
             )
 
         llm_model_name = custom_openai_model.strip() or openai_model_preset
+
+        prompt_regime = st.selectbox(
+            "Prompting strategy",
+            options=["zero_shot", "few_shot", "reasoning"],
+            index=0,
+            help="Controls which prompt template family is used when a YAML prompt is available.",
+        )
 
         openai_api_key = st.text_input(
             "OpenAI API key",
@@ -499,9 +508,14 @@ if run_btn:
                     model_name=llm_model_name,
                     api_key=openai_api_key,
                 )
-                manual_metadata_llm, manual_metadata_llm_raw = infer_manual_metadata_symbols(
+                with open(PROMPTS_YAML, "r", encoding="utf-8") as f:
+                    prompts_cfg = yaml.safe_load(f) or {}
+                manual_metadata_prompt_source = "not_used"
+                manual_metadata_llm, manual_metadata_llm_raw, manual_metadata_prompt_source = infer_manual_metadata_symbols(
                     manual_meta_text,
                     manual_llm_runner,
+                    prompts_cfg=prompts_cfg,
+                    prompt_regime=prompt_regime,
                 )
 
                 # explicit key:value wins, AI fills gaps
@@ -677,6 +691,8 @@ if run_btn:
 
         # Debug
         st.write("LLM calls:", len(details["llm_debug"].get("calls", [])))
+        st.markdown("**Manual metadata prompt source:**")
+        st.write(manual_metadata_prompt_source)
         with st.expander("Debug: auto-derived inputs and AI/metadata inferences"):
             st.markdown("**Auto-derived inputs (from the table only):**")
             st.json(details.get("auto_inputs", {}))

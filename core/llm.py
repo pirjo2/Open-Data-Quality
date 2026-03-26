@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+import yaml
 
 DATE_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b", re.I)
 JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -583,7 +584,104 @@ Example output:
 
     except Exception:
         return {}, raw'''
+def get_prompt_template_with_fallback(
+    prompts_cfg: Dict[str, Any],
+    regime: str,
+    prompt_name: str,
+    fallback_template: str,
+) -> Tuple[str, str]:
+    """
+    Return (template, source), where source is:
+    - 'yaml:<regime>' if template was found from prompts.yaml
+    - 'fallback' otherwise
+    """
+    try:
+        tmpl = (
+            (prompts_cfg or {})
+            .get("prompt_regimes", {})
+            .get(regime, {})
+            .get(prompt_name, None)
+        )
+        if isinstance(tmpl, str) and tmpl.strip():
+            return tmpl, f"yaml:{regime}"
+    except Exception:
+        pass
+
+    return fallback_template, "fallback"
+
 def infer_manual_metadata_symbols(
+    text: str,
+    llm_runner,
+    prompts_cfg: Optional[Dict[str, Any]] = None,
+    prompt_regime: str = "zero_shot",
+) -> Tuple[Dict[str, Any], str, str]:
+    if not llm_runner or not text or not text.strip():
+        return {}, "", "not_used"
+
+    fallback_prompt = """
+Extract Vetrò metadata symbols from the text below.
+
+Return ONLY valid JSON.
+Allowed keys:
+pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
+
+Rules:
+- Presence keys must be 0 or 1
+- Date keys must be in YYYY-MM-DD format
+- Natural-language update frequency counts as lu=1
+- du=1 only if update dates are explicitly given
+- If uncertain, omit the key
+- No explanation, no markdown
+
+Text:
+{text}
+"""
+
+    prompt_template, prompt_source = get_prompt_template_with_fallback(
+        prompts_cfg=prompts_cfg or {},
+        regime=prompt_regime,
+        prompt_name="manual_metadata_extraction",
+        fallback_template=fallback_prompt,
+    )
+
+    prompt = prompt_template.format(text=text)
+
+    try:
+        raw = llm_runner(prompt, 96)
+    except Exception as e:
+        return {}, f"LLM_ERROR: {e}", prompt_source
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return {}, raw, prompt_source
+
+        allowed_keys = {
+            "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
+            "dp", "sd", "edp", "ed", "cd", "lu", "du"
+        }
+
+        cleaned: Dict[str, Any] = {}
+        for k, v in data.items():
+            if k not in allowed_keys:
+                continue
+
+            if k in {"dp", "sd", "edp", "ed", "cd"}:
+                if isinstance(v, str):
+                    m = re.search(r"\d{4}-\d{2}-\d{2}", v)
+                    if m:
+                        cleaned[k] = m.group(0)
+                continue
+
+            if v in [0, 1]:
+                cleaned[k] = float(v)
+
+        return cleaned, raw, prompt_source
+
+    except Exception:
+        return {}, raw, prompt_source    
+
+'''def infer_manual_metadata_symbols(
     text: str,
     llm_runner,
 ) -> Tuple[Dict[str, Any], str]:
@@ -643,3 +741,4 @@ Text:
 
     except Exception:
         return {}, raw
+'''
