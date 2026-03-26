@@ -8,6 +8,7 @@ from datetime import date as _date_type
 import json
 
 import pandas as pd
+from core.llm import get_prompt_template_with_fallback
 
 # --- Turvaline tingimusavaldiste eval --- #
 COND_ALLOWED_RE = re.compile(r"^[0-9a-zA-Z_ .<>=!()+\-*/]+$")
@@ -172,6 +173,74 @@ def _infer_currentness_anchor(
     df: pd.DataFrame,
     manual_metadata_text: str,
     llm_runner,
+    prompts_cfg: Optional[Dict[str, Any]] = None,
+    prompt_regime: str = "zero_shot",
+) -> Tuple[Optional[str], Optional[str], str]:
+    if not llm_runner or not manual_metadata_text or not manual_metadata_text.strip():
+        return None, None, "not_used"
+
+    sample_rows = df.head(5).to_dict(orient="records")
+
+    fallback_prompt = """
+Return ONLY valid JSON with these keys:
+- current_column
+- current_value
+
+Task:
+Infer which dataset column is used to evaluate whether a row is current,
+and what value represents the current reference period.
+
+Rules:
+- Use only a column that actually exists in the dataset
+- current_value must match the dataset format if possible
+- If uncertain, return {}
+
+Metadata text:
+{manual_metadata_text}
+
+Columns:
+{columns}
+
+Sample rows:
+{sample_rows}
+"""
+
+    prompt_template, prompt_source = get_prompt_template_with_fallback(
+        prompts_cfg=prompts_cfg or {},
+        regime=prompt_regime,
+        prompt_name="currentness_anchor",
+        fallback_template=fallback_prompt,
+    )
+
+    prompt = prompt_template.format(
+        manual_metadata_text=manual_metadata_text,
+        columns=list(df.columns),
+        sample_rows=json.dumps(sample_rows, default=str),
+    )
+
+    raw = llm_runner(prompt, 96)
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None, None, prompt_source
+    except Exception:
+        return None, None, prompt_source
+
+    col = data.get("current_column")
+    val = data.get("current_value")
+
+    if col not in df.columns:
+        return None, None, prompt_source
+    if val is None:
+        return None, None, prompt_source
+
+    return str(col), str(val), prompt_source
+
+'''def _infer_currentness_anchor(
+    df: pd.DataFrame,
+    manual_metadata_text: str,
+    llm_runner,
 ) -> Tuple[Optional[str], Optional[str]]:
     if not llm_runner or not manual_metadata_text or not manual_metadata_text.strip():
         return None, None
@@ -220,7 +289,7 @@ Rules:
         return None, None
 
     return str(col), str(val)
-
+'''
 def _chunk_list(items, chunk_size):
     for i in range(0, len(items), chunk_size):
         yield items[i:i + chunk_size]
@@ -411,6 +480,8 @@ def compute_metrics(
     manual_metadata_text: Optional[str] = None,
     trino_metadata: Optional[Dict[str, Any]] = None,
     trino_metadata_raw: Optional[Dict[str, Any]] = None,
+    prompts_cfg: Optional[Dict[str, Any]] = None,
+    prompt_regime: str = "zero_shot",
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     # Accept either the full config or just vetro_methodology
     vetro = formulas_cfg.get("vetro_methodology", formulas_cfg)
@@ -441,6 +512,7 @@ def compute_metrics(
         "llm_confidence": {},
         "llm_raw": {},
         "llm_evidence": {},
+        "prompt_sources": {},
     }
 
     # Collect symbols used by metrics
@@ -461,14 +533,19 @@ def compute_metrics(
     manual_metadata_text = manual_metadata_text or ""
     trino_metadata = trino_metadata or {}
     trino_metadata_raw = trino_metadata_raw or {}
+    prompts_cfg = prompts_cfg or {}
 
         # AI infers currentness semantics, code computes ncr deterministically
     if auto_inputs.get("ncr") is None and use_llm and llm_runner is not None:
-        current_col, current_val = _infer_currentness_anchor(
+        current_col, current_val, currentness_prompt_source = _infer_currentness_anchor(
             df=df,
             manual_metadata_text=manual_metadata_text,
             llm_runner=llm_runner,
+            prompts_cfg=prompts_cfg,
+            prompt_regime=prompt_regime,
         )
+
+        details["prompt_sources"]["currentness_anchor"] = currentness_prompt_source
 
         if current_col and current_val:
             series = df[current_col].astype(str).str.strip()

@@ -77,6 +77,7 @@ def run_quality_assessment(
     manual_metadata_text: Optional[str] = None,
     trino_metadata: Optional[Dict[str, Any]] = None,
     trino_metadata_raw: Optional[Dict[str, Any]] = None,
+    prompt_regime: str = "zero_shot",
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     with open(formulas_yaml_path, "r", encoding="utf-8") as f:
         formulas_cfg = yaml.safe_load(f)
@@ -98,6 +99,8 @@ def run_quality_assessment(
         df=df,
         formulas_cfg=formulas_cfg,
         prompt_defs=prompt_defs,
+        prompts_cfg=prompts_cfg,
+        prompt_regime=prompt_regime,
         use_llm=use_llm,
         llm_runner=llm_runner,
         file_ext=file_ext,

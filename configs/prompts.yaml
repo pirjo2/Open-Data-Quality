@@ -137,6 +137,29 @@ prompt_regimes:
       Text:
       {text}
 
+    currentness_anchor: |
+    Return ONLY valid JSON with these keys:
+    - current_column
+    - current_value
+
+    Task:
+    Infer which dataset column is used to evaluate whether a row is current,
+    and what value represents the current reference period.
+
+    Rules:
+    - Use only a column that actually exists in the dataset
+    - current_value must match the dataset format if possible
+    - If uncertain, return {}
+
+    Metadata text:
+    {manual_metadata_text}
+
+    Columns:
+    {columns}
+
+    Sample rows:
+    {sample_rows}
+
   few_shot:
     manual_metadata_extraction: |
       Extract Vetrò metadata symbols from the text below.
@@ -167,6 +190,29 @@ prompt_regimes:
       Text:
       {text}
 
+    currentness_anchor: |
+    Return ONLY valid JSON with these keys:
+    - current_column
+    - current_value
+
+    Example:
+    Metadata: The current reference period for this dataset is 2026-03. The time variable is stored in column record_period.
+    Output: {"current_column": "record_period", "current_value": "2026-03"}
+
+    Rules:
+    - Use only a column that actually exists in the dataset
+    - current_value must match the dataset format if possible
+    - If uncertain, return {}
+
+    Metadata text:
+    {manual_metadata_text}
+
+    Columns:
+    {columns}
+
+    Sample rows:
+    {sample_rows}
+
   reasoning:
     manual_metadata_extraction: |
       Extract Vetrò metadata symbols conservatively from the text below.
@@ -187,3 +233,25 @@ prompt_regimes:
 
       Text:
       {text}
+    currentness_anchor: |
+    Infer conservatively which dataset column is used to determine whether a row is current,
+    and what value should be treated as the current reference period.
+
+    Return ONLY valid JSON with these keys:
+    - current_column
+    - current_value
+
+    Rules:
+    - Use only a column that actually exists in the dataset
+    - current_value must match the dataset format if possible
+    - Do not invent facts
+    - If uncertain, return {}
+
+    Metadata text:
+    {manual_metadata_text}
+
+    Columns:
+    {columns}
+
+    Sample rows:
+  {sample_rows}

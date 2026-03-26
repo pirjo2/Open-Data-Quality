@@ -646,6 +646,7 @@ if run_btn:
                 df=df,
                 formulas_yaml_path=FORMULAS_YAML,
                 prompts_yaml_path=PROMPTS_YAML,
+                prompt_regime=prompt_regime,
                 use_llm=use_llm,
                 llm_provider=llm_provider,
                 llm_model_name=llm_model_name,
@@ -693,6 +694,8 @@ if run_btn:
         st.write("LLM calls:", len(details["llm_debug"].get("calls", [])))
         st.markdown("**Manual metadata prompt source:**")
         st.write(manual_metadata_prompt_source)
+        st.markdown("**Prompt sources:**")
+        st.json(details.get("prompt_sources", {}))
         with st.expander("Debug: auto-derived inputs and AI/metadata inferences"):
             st.markdown("**Auto-derived inputs (from the table only):**")
             st.json(details.get("auto_inputs", {}))
