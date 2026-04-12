@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
 import os
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,9 +34,6 @@ OPENAI_MODEL_OPTIONS = [
 
 UPLOAD_MODE = "Upload file"
 TRINO_MODE = "Trino SQL query (advanced)"
-
-DATASET_FILE_TYPES = ["csv", "tsv", "txt", "xls", "xlsx", "json", "yaml", "yml"]
-METADATA_TEXT_FORMATS = ["Key: value", "JSON", "YAML"]
 
 DIMENSION_ORDER = [
     "traceability",
@@ -248,47 +245,75 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in out.items() if v is not None}
 
 
-def parse_uploaded_table_file(uploaded, suffix: str) -> pd.DataFrame:
-    import io
-
-    raw_bytes = uploaded.getvalue()
-    byte_stream = io.BytesIO(raw_bytes)
-
-    if suffix in {".csv", ".tsv", ".txt"}:
-        return pd.read_csv(byte_stream, sep=None, engine="python")
-    if suffix in {".xls", ".xlsx"}:
-        return pd.read_excel(byte_stream)
-    raise ValueError(f"Unsupported table file type: {suffix}")
-
-
-def extract_dict_from_metadata_table(df: pd.DataFrame) -> Dict[str, Any]:
+def dataframe_to_metadata_dict(df: pd.DataFrame) -> Dict[str, Any]:
     if df is None or df.empty:
         return {}
 
-    normalized_columns = {str(col).strip().lower(): col for col in df.columns}
-    key_col = next(
-        (normalized_columns[col] for col in ["key", "name", "field", "symbol", "parameter"] if col in normalized_columns),
-        None,
-    )
-    value_col = next(
-        (normalized_columns[col] for col in ["value", "content", "description", "text"] if col in normalized_columns),
-        None,
-    )
+    clean_df = df.dropna(how="all").copy()
+    if clean_df.empty:
+        return {}
+
+    clean_df.columns = [str(col).strip() for col in clean_df.columns]
+    lower_cols = [col.lower() for col in clean_df.columns]
+
+    key_aliases = {"key", "field", "name", "symbol", "parameter"}
+    value_aliases = {"value", "content", "data", "answer"}
+
+    key_col = None
+    value_col = None
+    for col in clean_df.columns:
+        if col.lower() in key_aliases and key_col is None:
+            key_col = col
+        if col.lower() in value_aliases and value_col is None:
+            value_col = col
 
     if key_col and value_col:
-        parsed: Dict[str, Any] = {}
-        subset = df[[key_col, value_col]].dropna(how="all")
-        for _, row in subset.iterrows():
-            key = str(row[key_col]).strip()
-            if key and key.lower() != "nan":
-                parsed[key] = row[value_col]
-        return parsed
+        out: Dict[str, Any] = {}
+        for _, row in clean_df[[key_col, value_col]].dropna(how="all").iterrows():
+            key = str(row.get(key_col, "")).strip()
+            value = row.get(value_col)
+            if key:
+                out[key] = value
+        return out
 
-    if len(df) == 1:
-        row = df.iloc[0].to_dict()
-        return {str(k): v for k, v in row.items() if pd.notna(v)}
+    if len(clean_df.columns) == 2:
+        first_col, second_col = clean_df.columns[:2]
+        out = {}
+        for _, row in clean_df[[first_col, second_col]].dropna(how="all").iterrows():
+            key = str(row.get(first_col, "")).strip()
+            value = row.get(second_col)
+            if key:
+                out[key] = value
+        if out:
+            return out
+
+    if len(clean_df) == 1:
+        row = clean_df.iloc[0].dropna()
+        return {str(k).strip(): v for k, v in row.to_dict().items() if str(k).strip()}
 
     return {}
+
+
+def parse_text_metadata_content(text: str) -> Dict[str, Any]:
+    clean_text = (text or "").strip()
+    if not clean_text:
+        return {}
+
+    try:
+        parsed = json.loads(clean_text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    try:
+        parsed = yaml.safe_load(clean_text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    return parse_kv_metadata(clean_text)
 
 
 def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
@@ -296,65 +321,66 @@ def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
         return {}, ""
 
     raw_bytes = uploaded.getvalue()
-    text_content = raw_bytes.decode("utf-8", errors="ignore")
     suffix = Path(uploaded.name).suffix.lower()
 
-    if suffix in {".csv", ".tsv", ".txt", ".xls", ".xlsx"}:
-        df = parse_uploaded_table_file(uploaded, suffix)
-        table_text = df.to_json(orient="records", force_ascii=False, indent=2)
-        parsed = extract_dict_from_metadata_table(df)
-        return parsed, table_text
+    if suffix in {".csv", ".tsv", ".txt"}:
+        text_content = raw_bytes.decode("utf-8", errors="ignore")
+        if suffix in {".csv", ".tsv"}:
+            try:
+                df = pd.read_csv(io.BytesIO(raw_bytes), sep=None, engine="python")
+                parsed = dataframe_to_metadata_dict(df)
+                return parsed, text_content
+            except Exception:
+                return parse_text_metadata_content(text_content), text_content
+        return parse_text_metadata_content(text_content), text_content
+
+    if suffix in {".xls", ".xlsx"}:
+        df = pd.read_excel(io.BytesIO(raw_bytes))
+        text_content = df.to_csv(index=False)
+        return dataframe_to_metadata_dict(df), text_content
 
     if suffix == ".json":
+        text_content = raw_bytes.decode("utf-8", errors="ignore")
         try:
             parsed = json.loads(text_content)
             if isinstance(parsed, dict):
                 return parsed, text_content
             if isinstance(parsed, list):
-                return {}, text_content
+                df = pd.json_normalize(parsed)
+                return dataframe_to_metadata_dict(df), text_content
         except Exception:
             pass
         return {}, text_content
 
     if suffix in {".yaml", ".yml"}:
+        text_content = raw_bytes.decode("utf-8", errors="ignore")
         try:
             parsed = yaml.safe_load(text_content) or {}
             if isinstance(parsed, dict):
                 return parsed, text_content
             if isinstance(parsed, list):
-                return {}, text_content
+                df = pd.json_normalize(parsed)
+                return dataframe_to_metadata_dict(df), text_content
         except Exception:
             pass
         return {}, text_content
 
-    return parse_kv_metadata(text_content), text_content
+    return {}, raw_bytes.decode("utf-8", errors="ignore")
 
-def parse_manual_metadata_text(text: str, text_format: str) -> Dict[str, Any]:
-    clean_text = (text or "").strip()
-    if not clean_text:
-        return {}
 
-    if text_format == "JSON":
-        try:
-            parsed = json.loads(clean_text)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
-    if text_format == "YAML":
-        try:
-            parsed = yaml.safe_load(clean_text)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
-    return parse_kv_metadata(clean_text)
+def parse_manual_metadata_text(text: str) -> Dict[str, Any]:
+    return parse_text_metadata_content(text)
 
 
 def parse_uploaded_dataset_file(uploaded_file) -> Tuple[pd.DataFrame, str]:
     name = uploaded_file.name
     ext = Path(name).suffix.lower()
 
-    if ext in {".csv", ".tsv", ".txt", ".xls", ".xlsx"}:
-        return parse_uploaded_table_file(uploaded_file, ext), ext
+    if ext in {".csv", ".tsv", ".txt"}:
+        return pd.read_csv(uploaded_file, sep=None, engine="python"), ext
+
+    if ext in {".xls", ".xlsx"}:
+        return pd.read_excel(uploaded_file), ext
 
     if ext == ".json":
         raw = uploaded_file.getvalue().decode("utf-8", errors="ignore")
@@ -382,6 +408,7 @@ def parse_uploaded_dataset_file(uploaded_file) -> Tuple[pd.DataFrame, str]:
 
     raise ValueError(f"Unsupported file type: {ext}")
 
+
 def load_prompts_cfg(path: str = PROMPTS_YAML) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
@@ -394,24 +421,6 @@ def get_prompt_template(cfg: Dict[str, Any], regime: str, name: str, fallback: s
         .get(name, fallback)
     ) or fallback
 
-
-def build_prompts_file(
-    base_cfg: Dict[str, Any],
-    regime: str,
-    manual_metadata_prompt: str,
-    currentness_anchor_prompt: str,
-    semantic_metric_prompt: str,
-) -> str:
-    cfg = json.loads(json.dumps(base_cfg))
-    cfg.setdefault("prompt_regimes", {}).setdefault(regime, {})
-    cfg["prompt_regimes"][regime]["manual_metadata_extraction"] = manual_metadata_prompt
-    cfg["prompt_regimes"][regime]["currentness_anchor"] = currentness_anchor_prompt
-    cfg["prompt_regimes"][regime]["semantic_metric_inference"] = semantic_metric_prompt
-
-    temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8")
-    yaml.safe_dump(cfg, temp_file, allow_unicode=True, sort_keys=False)
-    temp_file.close()
-    return temp_file.name
 
 
 def build_ai_recommendation_prompt(
@@ -553,12 +562,8 @@ def render_dimension_tiles(dimension_scores: pd.DataFrame) -> None:
                 )
 
 
-def get_metadata_placeholder(text_format: str) -> str:
-    if text_format == "JSON":
-        return '{\n  "publisher": "Ministry",\n  "title": "Dataset name",\n  "metadata_created": "2024-01-15"\n}'
-    if text_format == "YAML":
-        return "publisher: Ministry\ntitle: Dataset name\nmetadata_created: 2024-01-15"
-    return "publisher: Ministry\ntitle: Dataset name\nmetadata_created: 2024-01-15"
+def get_metadata_placeholder() -> str:
+    return "publisher: Ministry\ntitle: Dataset name\nmetadata_created: 2024-01-15\nmetadata_modified: 2024-03-01"
 
 
 st.set_page_config(page_title="Open Data Quality", layout="wide")
@@ -567,50 +572,36 @@ inject_css()
 st.title("Open Data Quality")
 with st.expander("More info", expanded=False):
     st.markdown(
-        """
-        This Streamlit prototype evaluates open datasets with the Vetrò et al. (2016) framework and an optional AI-assisted workflow.
+        f"""
+        **Author:** {APP_AUTHOR}  
+        **Supervisor:** {APP_SUPERVISOR}
+
+        This Streamlit prototype evaluates open datasets with the Vetrò et al. (2016) framework and an AI-assisted workflow.
 
         The app combines:
-        - structure-based checks from the uploaded table or SQL result,
-        - optional metadata from file upload or pasted text,
-        - optional AI-based inference for missing semantic signals.
-
-        In the results view, **expiration** is shown as a separate top-level category, so the overview contains 7 main categories.
+        - structure-based checks from the uploaded table or SQL result
+        - optional metadata from text or file upload
+        - AI-based inference for missing semantic signals
         """
     )
 
-base_prompts_cfg = load_prompts_cfg(PROMPTS_YAML)
-advanced_default_regime = "few_shot"
-prompt_regime = "few_shot"
-manual_prompt_default = get_prompt_template(
-    base_prompts_cfg,
-    advanced_default_regime,
-    "manual_metadata_extraction",
-    "",
+st.markdown(
+    '<div class="top-note"><div class="section-title">Choose data source</div><div class="section-subtitle">Use file upload for the common workflow, or Trino when you already have direct query access.</div></div>',
+    unsafe_allow_html=True,
 )
-currentness_prompt_default = get_prompt_template(
-    base_prompts_cfg,
-    advanced_default_regime,
-    "currentness_anchor",
-    "",
-)
-semantic_prompt_default = get_prompt_template(
-    base_prompts_cfg,
-    advanced_default_regime,
-    "semantic_metric_inference",
-    "",
-)
-
-st.markdown("### Dataset input")
-st.caption("Choose the dataset source first. Input and metadata upload now support the same file types: CSV, TSV, TXT, Excel, JSON, and YAML.")
 
 data_source = st.radio(
     "Dataset source",
     options=[UPLOAD_MODE, TRINO_MODE],
     index=0,
     horizontal=True,
+    label_visibility="collapsed",
 )
 
+base_prompts_cfg = load_prompts_cfg(PROMPTS_YAML)
+prompt_regime = "few_shot"
+
+st.markdown("### Dataset input")
 uploaded_file = None
 trino_host = ""
 trino_port = 443
@@ -622,44 +613,44 @@ trino_sql = ""
 trino_meta_sql = ""
 
 if data_source == UPLOAD_MODE:
+    st.caption("Supported dataset formats: CSV, TSV, TXT, Excel, JSON, YAML.")
     uploaded_file = st.file_uploader(
         "Input file",
-        type=DATASET_FILE_TYPES,
-        help="Dataset upload. Supports CSV, TSV, TXT, XLS, XLSX, JSON, YAML, and YML.",
+        type=COMMON_FILE_TYPES,
+        help="Drag and drop the dataset file here.",
     )
 else:
-    trino_left, trino_right = st.columns([1, 2], gap="large")
-    with trino_left:
-        trino_host = st.text_input("Host", value="trino.avaandmeait.ee")
-        trino_port = st.number_input("Port", min_value=1, max_value=65535, value=443)
-        trino_catalog = st.text_input("Catalog", value="")
-        trino_schema = st.text_input("Schema", value="")
-        trino_user = st.text_input("Username", value="")
-        trino_password = st.text_input("Password", value="", type="password")
-    with trino_right:
-        trino_sql = st.text_area(
-            "Data query",
-            height=180,
-            placeholder="SELECT * FROM some_table LIMIT 100000",
-        )
-        trino_meta_sql = st.text_area(
-            "Metadata query",
-            height=180,
-            placeholder=(
-                "SELECT\n"
-                "  title,\n"
-                "  notes AS description,\n"
-                "  metadata_created,\n"
-                "  metadata_modified,\n"
-                "  organization.name AS publisher\n"
-                "FROM landing.avaandmete_portaal.dataset_metadata\n"
-                "LIMIT 1"
-            ),
-        )
+    trino_host = st.text_input("Host", value="trino.avaandmeait.ee")
+    trino_port = st.number_input("Port", min_value=1, max_value=65535, value=443)
+    trino_catalog = st.text_input("Catalog", value="")
+    trino_schema = st.text_input("Schema", value="")
+    trino_user = st.text_input("Username", value="")
+    trino_password = st.text_input("Password", value="", type="password")
+    trino_sql = st.text_area(
+        "Data query",
+        height=180,
+        placeholder="SELECT * FROM some_table LIMIT 100000",
+    )
+    trino_meta_sql = st.text_area(
+        "Metadata query",
+        height=180,
+        placeholder=(
+            "SELECT\n"
+            "  title,\n"
+            "  notes AS description,\n"
+            "  metadata_created,\n"
+            "  metadata_modified,\n"
+            "  organization.name AS publisher\n"
+            "FROM landing.avaandmete_portaal.dataset_metadata\n"
+            "LIMIT 1"
+        ),
+    )
 
 st.markdown("### AI settings")
-ai_top_left, ai_top_mid, ai_top_right = st.columns([1, 1, 1], gap="large")
-with ai_top_left:
+use_llm = True
+ai_row_1a, ai_row_1b, ai_row_1c = st.columns([1, 1, 1], gap="large")
+
+with ai_row_1a:
     row_limit = st.number_input(
         "Rows",
         min_value=0,
@@ -668,41 +659,33 @@ with ai_top_left:
         help="0 means all rows for uploaded files.",
         disabled=data_source == TRINO_MODE,
     )
-with ai_top_mid:
-    use_llm = st.checkbox("Use AI assistance", value=True)
+
+with ai_row_1b:
     llm_provider = st.selectbox(
         "AI provider",
         options=["openai", "huggingface"],
         index=0,
-        disabled=not use_llm,
     )
-with ai_top_right:
-    llm_model_name = ""
+
+with ai_row_1c:
+    openai_api_key: Optional[str] = None
     if llm_provider == "openai":
         llm_model_name = st.selectbox(
             "Model name",
             options=OPENAI_MODEL_OPTIONS,
             index=0,
-            disabled=not use_llm,
         )
     else:
         llm_model_name = st.selectbox(
             "Model name",
             options=HF_MODEL_OPTIONS,
             index=0,
-            disabled=not use_llm,
         )
 
-openai_api_key: Optional[str] = None
-ai_bottom_left, ai_bottom_right = st.columns([2, 1], gap="large")
-with ai_bottom_left:
+ai_row_2a, ai_row_2b = st.columns([4, 1.7], gap="large")
+with ai_row_2a:
     if llm_provider == "openai":
-        openai_api_key = st.text_input(
-            "OpenAI API key",
-            type="password",
-            value="",
-            disabled=not use_llm,
-        )
+        openai_api_key = st.text_input("OpenAI API key", type="password", value="")
         if not openai_api_key:
             try:
                 openai_api_key = st.secrets.get("OPENAI_API_KEY", "")
@@ -711,45 +694,40 @@ with ai_bottom_left:
         if not openai_api_key:
             openai_api_key = os.getenv("OPENAI_API_KEY", "")
     else:
-        st.text_input("OpenAI API key", value="Not needed for Hugging Face", disabled=True)
-with ai_bottom_right:
-    st.write("")
-    st.write("")
-    test_clicked = st.button("Test connection", disabled=not use_llm)
+        st.text_input("API key", value="Not required for local Hugging Face setup.", disabled=True)
 
-if test_clicked:
-    try:
-        runner = get_llm_runner(
-            provider=llm_provider,
-            model_name=llm_model_name,
-            api_key=openai_api_key,
-        )
-        raw = runner("Return exactly 3 lines:\nanswer: 1\nconfidence: 0.9\nevidence: test", 64)
-        st.success("Connection worked.")
-        st.code(raw)
-    except Exception as exc:
-        st.error(f"Connection test failed: {exc}")
+with ai_row_2b:
+    st.markdown("<div style='height: 1.9rem;'></div>", unsafe_allow_html=True)
+    test_clicked = st.button("Test connection", use_container_width=True)
+    if test_clicked:
+        try:
+            runner = get_llm_runner(
+                provider=llm_provider,
+                model_name=llm_model_name,
+                api_key=openai_api_key,
+            )
+            raw = runner("Return exactly 3 lines:\nanswer: 1\nconfidence: 0.9\nevidence: test", 64)
+            st.success("Connection worked.")
+            st.code(raw)
+        except Exception as exc:
+            st.error(f"Connection test failed: {exc}")
 
 st.markdown("### Optional metadata")
-st.caption("Upload a metadata file on the left or paste metadata text on the right. Pasted metadata format affects only the text box.")
-meta_left, meta_right = st.columns([1, 2], gap="large")
-with meta_left:
+meta_upload_col, meta_text_col = st.columns([1, 2], gap="large")
+
+with meta_upload_col:
+    st.caption("Supported metadata formats: CSV, TSV, TXT, Excel, JSON, YAML.")
     manual_meta_file = st.file_uploader(
         "Metadata file",
-        type=DATASET_FILE_TYPES,
-        help="Supports the same file types as the dataset upload. YAML is also accepted.",
+        type=COMMON_FILE_TYPES,
+        help="Optional metadata file for semantic signals.",
     )
-with meta_right:
-    metadata_text_format = st.selectbox(
-        "Pasted metadata format",
-        options=METADATA_TEXT_FORMATS,
-        index=0,
-        help="This controls how the text area content is parsed: simple key:value pairs, JSON, or YAML.",
-    )
+
+with meta_text_col:
     manual_meta_text = st.text_area(
         "Metadata text",
-        height=260,
-        placeholder=get_metadata_placeholder(metadata_text_format),
+        height=220,
+        placeholder=get_metadata_placeholder(),
     )
 
 with st.expander("Advanced settings", expanded=False):
@@ -757,67 +735,23 @@ with st.expander("Advanced settings", expanded=False):
         "Prompting strategy",
         options=["zero_shot", "few_shot", "reasoning"],
         index=1,
-        help="This controls which prompt family is used from prompts.yaml.",
+        help="Prompt templates are loaded from prompts.yaml.",
     )
-    allow_prompt_override = st.checkbox("Override prompts in UI", value=False)
-
-    base_manual_prompt = get_prompt_template(base_prompts_cfg, prompt_regime, "manual_metadata_extraction", manual_prompt_default)
-    base_currentness_prompt = get_prompt_template(base_prompts_cfg, prompt_regime, "currentness_anchor", currentness_prompt_default)
-    base_semantic_prompt = get_prompt_template(base_prompts_cfg, prompt_regime, "semantic_metric_inference", semantic_prompt_default)
-
-    manual_metadata_prompt = base_manual_prompt
-    currentness_anchor_prompt = base_currentness_prompt
-    semantic_metric_prompt = base_semantic_prompt
-    recommendation_prompt = DEFAULT_RECOMMENDATION_TEMPLATE
-
-    if allow_prompt_override:
-        manual_metadata_prompt = st.text_area(
-            "Manual metadata extraction prompt",
-            value=base_manual_prompt,
-            height=180,
-        )
-        currentness_anchor_prompt = st.text_area(
-            "Currentness anchor prompt",
-            value=base_currentness_prompt,
-            height=180,
-        )
-        semantic_metric_prompt = st.text_area(
-            "Semantic metric inference prompt",
-            value=base_semantic_prompt,
-            height=180,
-        )
-        recommendation_prompt = st.text_area(
-            "Recommendation prompt",
-            value=DEFAULT_RECOMMENDATION_TEMPLATE,
-            height=180,
-        )
-    else:
-        st.caption("Default prompts from prompts.yaml will be used.")
+    st.caption("Best place for prompt selection is here, under Advanced settings, because it changes methodology rather than the main input flow.")
 
 st.markdown("### Run assessment")
 run_btn = st.button("Run assessment", type="primary")
 
 if run_btn:
     prompts_yaml_path = PROMPTS_YAML
-    temp_prompt_file: Optional[str] = None
     conn = None
     try:
-        if use_llm and llm_provider == "openai" and not openai_api_key:
+        if llm_provider == "openai" and not openai_api_key:
             st.error("Please enter an OpenAI API key or configure OPENAI_API_KEY in Streamlit secrets or environment variables.")
             st.stop()
 
-        if allow_prompt_override:
-            temp_prompt_file = build_prompts_file(
-                base_cfg=base_prompts_cfg,
-                regime=prompt_regime,
-                manual_metadata_prompt=manual_metadata_prompt,
-                currentness_anchor_prompt=currentness_anchor_prompt,
-                semantic_metric_prompt=semantic_metric_prompt,
-            )
-            prompts_yaml_path = temp_prompt_file
-
         manual_meta_file_raw, manual_meta_file_text = parse_uploaded_metadata_file(manual_meta_file)
-        manual_text_raw = parse_manual_metadata_text(manual_meta_text, metadata_text_format)
+        manual_text_raw = parse_manual_metadata_text(manual_meta_text)
 
         combined_manual_meta_text = "\n\n".join(
             part for part in [manual_meta_file_text, manual_meta_text] if (part or "").strip()
@@ -1013,7 +947,6 @@ if run_btn:
                                 build_ai_recommendation_prompt(
                                     metrics_non_null,
                                     data_source,
-                                    template=recommendation_prompt,
                                 ),
                                 350,
                             ).strip()
@@ -1095,10 +1028,5 @@ if run_btn:
         if conn is not None:
             try:
                 conn.close()
-            except Exception:
-                pass
-        if temp_prompt_file and os.path.exists(temp_prompt_file):
-            try:
-                os.remove(temp_prompt_file)
             except Exception:
                 pass
