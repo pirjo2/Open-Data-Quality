@@ -1,4 +1,3 @@
 This dataset is updated every Monday.
-Update history:
-- updated on 2026-01-15
-- updated on 2026-02-10
+The latest releases were published on 2025-01-08, 2025-01-15, and 2025-01-22.
+A short update history is provided in the dataset documentation.

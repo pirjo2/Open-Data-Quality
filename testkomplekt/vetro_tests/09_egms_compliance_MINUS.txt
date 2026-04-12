@@ -1,9 +1,2 @@
-Title: missing
-Description: missing
-Identifier: missing
-Publisher: missing
-Coverage: missing
-Language: missing
-Source: missing
-Date of creation: missing
-Category: missing
+Population figures prepared for internal reference.
+Additional metadata is not provided.

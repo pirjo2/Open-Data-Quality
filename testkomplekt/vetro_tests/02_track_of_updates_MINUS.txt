@@ -1,2 +1,2 @@
-Update schedule is not specified.
-No change history is provided.
+The dataset documentation does not describe how often the dataset is updated.
+No previous update dates are provided.

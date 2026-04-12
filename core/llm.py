@@ -16,7 +16,7 @@ EVID_LINE_RE = re.compile(r"(?im)^\s*evidence\s*[:=]\s*(.*)\s*$")
 NUM_RE = re.compile(r"[-+]?\d*\.?\d+")
 YES_RE = re.compile(r"\b(yes|true|present|exists|available)\b", re.IGNORECASE)
 NO_RE = re.compile(r"\b(no|false|missing|absent|not available)\b", re.IGNORECASE)
-
+DEBUG_PRINT_PROMPTS = False
 
 def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
@@ -438,7 +438,10 @@ Return values for these symbols:
 
 Respond ONLY in JSON.
 """
-
+    if DEBUG_PRINT_PROMPTS:
+        print("\n--- MANUAL_METADATA PROMPT START ---\n")
+        print(prompt)
+        print("\n--- MANUAL_METADATA PROMPT END ---\n")
     raw = llm_runner(prompt, 128)
 
     import json

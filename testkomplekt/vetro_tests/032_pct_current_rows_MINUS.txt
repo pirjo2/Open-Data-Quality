@@ -1,0 +1,3 @@
+The current reporting period for this dataset is 2026-03.
+The reporting period is stored in the column record_period.
+Rows belonging to older reporting periods should be treated as not current.

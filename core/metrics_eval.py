@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Tuple, Optional
-
+from itertools import combinations
 import math
 import re
 #from datetime import date as _date_type
@@ -9,6 +9,8 @@ import json
 
 import pandas as pd
 from core.llm import get_prompt_template_with_fallback
+
+DEBUG_PRINT_PROMPTS = False
 
 # --- Turvaline tingimusavaldiste eval --- #
 COND_ALLOWED_RE = re.compile(r"^[0-9a-zA-Z_ .<>=!()+\-*/]+$")
@@ -168,6 +170,50 @@ def _date_to_num(value: Any) -> Optional[float]:
         return float(ts.date().toordinal())
     except Exception:
         return None
+    
+def _extract_currentness_anchor_from_text(
+    text: str,
+    df: pd.DataFrame,
+) -> Tuple[Optional[str], Optional[str]]:
+    if not text or not text.strip():
+        return None, None
+
+    columns = [str(c) for c in df.columns]
+
+    found_col = None
+    for col in sorted(columns, key=len, reverse=True):
+        if re.search(rf"\bcolumn\s+[`\"']?{re.escape(col)}[`\"']?\b", text, re.I):
+            found_col = col
+            break
+        if re.search(rf"\b[`\"']?{re.escape(col)}[`\"']?\s+column\b", text, re.I):
+            found_col = col
+            break
+
+    if not found_col:
+        return None, None
+
+    value_patterns = [
+        r"(?:current|latest|most recent)\s+(?:reporting|reference)?\s*period\s*(?:is|=|:)\s*([0-9]{4}-[0-9]{2}-[0-9]{2})",
+        r"(?:current|latest|most recent)\s+(?:reporting|reference)?\s*period\s*(?:is|=|:)\s*([0-9]{4}-[0-9]{2})",
+        r"(?:current|latest|most recent)\s+(?:reporting|reference)?\s*period\s*(?:is|=|:)\s*([0-9]{4}Q[1-4])",
+        r"(?:current|latest|most recent)\s+(?:reporting|reference)?\s*period\s*(?:is|=|:)\s*([0-9]{4})",
+    ]
+
+    candidates = []
+    for pat in value_patterns:
+        for m in re.finditer(pat, text, re.I):
+            candidates.append(m.group(1).strip())
+
+    if not candidates:
+        return None, None
+
+    series_values = set(df[found_col].astype(str).str.strip().tolist())
+
+    for candidate in candidates:
+        if candidate in series_values:
+            return found_col, candidate
+
+    return found_col, candidates[0]
 
 def _infer_currentness_anchor(
     df: pd.DataFrame,
@@ -177,6 +223,16 @@ def _infer_currentness_anchor(
     prompt_regime: str = "zero_shot",
 ) -> Tuple[Optional[str], Optional[str], str]:
     if not llm_runner or not manual_metadata_text or not manual_metadata_text.strip():
+        return None, None, "not_used"
+
+    rule_col, rule_val = _extract_currentness_anchor_from_text(
+        manual_metadata_text,
+        df,
+    )
+    if rule_col and rule_val:
+        return rule_col, rule_val, "rule_text"
+
+    if not llm_runner:
         return None, None, "not_used"
 
     sample_rows = df.head(5).to_dict(orient="records")
@@ -217,6 +273,10 @@ Sample rows:
         columns=list(df.columns),
         sample_rows=json.dumps(sample_rows, default=str),
     )
+    if DEBUG_PRINT_PROMPTS:
+        print("\n--- CURRENTNESS PROMPT START ---\n")
+        print(prompt)
+        print("\n--- CURENTNESS PROMPT END ---\n")
 
     raw = llm_runner(prompt, 96)
 
@@ -241,6 +301,157 @@ def _chunk_list(items, chunk_size):
     for i in range(0, len(items), chunk_size):
         yield items[i:i + chunk_size]
 
+def _get_numeric_series_map(
+    df: pd.DataFrame,
+    min_valid_ratio: float = 0.95,
+) -> Dict[str, pd.Series]:
+    """
+    Return columns that are numeric or almost numeric after coercion.
+    """
+    numeric_map: Dict[str, pd.Series] = {}
+
+    for col in df.columns:
+        s = pd.to_numeric(df[col], errors="coerce")
+        if float(s.notna().mean()) >= min_valid_ratio:
+            numeric_map[str(col)] = s.astype(float)
+
+    return numeric_map
+
+
+def _infer_aggregation_symbols_from_table(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Language-independent aggregation inference.
+
+    Idea:
+    - find numeric columns
+    - try each numeric column as declared aggregate (dav)
+    - try subsets of the other numeric columns as components
+    - choose the combination where row-wise component sums best match the candidate column
+
+    Returns:
+      {
+        "dav": ...,
+        "oav": ...,
+        "e": ...,
+        "sc": ...
+      }
+    or {} if no plausible aggregation structure is found.
+    """
+    numeric_map = _get_numeric_series_map(df)
+    cols = list(numeric_map.keys())
+
+    # Require at least 4 numeric columns:
+    # one aggregate candidate + at least 2 components + usually one id/extra column
+    if len(cols) < 4:
+        return {}
+
+    best: Optional[Dict[str, Any]] = None
+    max_subset_size = min(4, len(cols) - 1)
+    tol = 1e-9
+
+    for target_col in cols:
+        other_cols = [c for c in cols if c != target_col]
+
+        for r in range(2, max_subset_size + 1):
+            for comp_cols in combinations(other_cols, r):
+                temp = pd.concat(
+                    [numeric_map[target_col]] + [numeric_map[c] for c in comp_cols],
+                    axis=1,
+                )
+
+                valid = temp.notna().all(axis=1)
+                if int(valid.sum()) == 0:
+                    continue
+
+                dav_series = numeric_map[target_col][valid]
+                component_frame = pd.concat(
+                    [numeric_map[c][valid] for c in comp_cols],
+                    axis=1,
+                )
+                oav_series = component_frame.sum(axis=1)
+
+                diff_series = (oav_series - dav_series).abs()
+
+                exact_ratio = float((diff_series <= tol).mean())
+                total_abs_error = float(diff_series.sum())
+                mean_abs_error = float(diff_series.mean())
+                scale = max(float(dav_series.abs().sum()), 1.0)
+
+                score = (
+                    exact_ratio,
+                    -(total_abs_error / scale),
+                    -mean_abs_error,
+                    len(comp_cols),
+                )
+
+                candidate = {
+                    "target_col": target_col,
+                    "component_cols": list(comp_cols),
+                    "exact_ratio": exact_ratio,
+                    "total_abs_error": total_abs_error,
+                    "mean_abs_error": mean_abs_error,
+                    "scale": scale,
+                    "dav_total": float(dav_series.sum()),
+                    "oav_total": float(oav_series.sum()),
+                    "score": score,
+                }
+
+                if best is None or candidate["score"] > best["score"]:
+                    best = candidate
+
+    if best is None:
+        return {}
+
+    # Loose plausibility check:
+    # reject only if the best candidate is still clearly nonsense
+    if best["exact_ratio"] == 0.0 and best["total_abs_error"] > best["scale"]:
+        return {}
+
+    return {
+        "dav": best["dav_total"],
+        "oav": best["oav_total"],
+        "e": best["total_abs_error"],
+        "sc": best["scale"],
+    }
+
+def _to_json_safe(value: Any) -> Any:
+    """
+    Convert numpy scalar values into normal Python values
+    so prompt examples look cleaner for the LLM.
+    """
+    if isinstance(value, dict):
+        return {k: _to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_to_json_safe(v) for v in value]
+
+    try:
+        import numpy as np
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, np.floating):
+            return float(value)
+    except Exception:
+        pass
+
+    return value
+
+def _filter_prompt_metadata(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Keep only meaningful manual metadata values for prompt context.
+    Avoid flooding the LLM with explicit zero-values that may bias inference.
+    """
+    out: Dict[str, Any] = {}
+    for k, v in (meta or {}).items():
+        if v is None:
+            continue
+        if isinstance(v, str) and not v.strip():
+            continue
+        if v in {0, 0.0, "0"}:
+            continue
+        out[k] = v
+    return out
 
 # --- Automaatsete sisendite arvutamine --- #
 def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, Any]:
@@ -372,7 +583,13 @@ def compute_metrics(
     trino_metadata = trino_metadata or {}
     trino_metadata_raw = trino_metadata_raw or {}
     prompts_cfg = prompts_cfg or {}
-
+    aggregation_auto = _infer_aggregation_symbols_from_table(df)
+    if aggregation_auto:
+        details["aggregation_auto"] = aggregation_auto
+        for sym, val in aggregation_auto.items():
+            details["symbol_values"][sym] = val
+            details["symbol_source"][sym] = "auto_aggregation"
+            env[sym] = val
         # AI infers currentness semantics, code computes ncr deterministically
     if auto_inputs.get("ncr") is None and use_llm and llm_runner is not None:
         current_col, current_val, currentness_prompt_source = _infer_currentness_anchor(
@@ -382,6 +599,11 @@ def compute_metrics(
             prompts_cfg=prompts_cfg,
             prompt_regime=prompt_regime,
         )
+        details["currentness_anchor_debug"] = {
+            "column": current_col,
+            "value": current_val,
+            "prompt_source": currentness_prompt_source,
+        }
 
         details["prompt_sources"]["currentness_anchor"] = currentness_prompt_source
 
@@ -422,7 +644,7 @@ def compute_metrics(
     }
 
     for sym in sorted(required_symbols):
-        if details["symbol_source"].get(sym) in {"parser", "ai+auto"}:
+        if details["symbol_source"].get(sym) in {"parser", "ai+auto", "auto_aggregation"}:
             continue
 
         # 1) explicit/manual metadata is strongest
@@ -501,7 +723,7 @@ def compute_metrics(
                 s = df[col]
                 dtype = str(s.dtype)
                 missing_ratio = float(s.isna().mean())
-                sample_vals = list(s.dropna().unique()[:3])
+                sample_vals = _to_json_safe(list(s.dropna().unique()[:3]))                
                 context_lines.append(
                     f"- {col}: dtype={dtype}, missing={missing_ratio:.3f}, samples={sample_vals}"
                 )
@@ -512,11 +734,13 @@ def compute_metrics(
                 json.dumps(trino_metadata_raw, indent=2, default=str)
             )
 
-            if manual_metadata:
+            filtered_manual_metadata = _filter_prompt_metadata(manual_metadata)
+
+            if filtered_manual_metadata:
                 context_lines.append("")
                 context_lines.append("Manual metadata overrides:")
                 context_lines.append(
-                    json.dumps(manual_metadata, indent=2, default=str)
+                    json.dumps(filtered_manual_metadata, indent=2, default=str)
                 )
 
             if manual_metadata_text.strip():
@@ -526,16 +750,16 @@ def compute_metrics(
 
             context_lines.append("")
             context_lines.append("Sample rows (first 5):")
-            sample_rows = df.head(5).to_dict(orient="records")
+            sample_rows = _to_json_safe(df.head(5).to_dict(orient="records"))
             context_lines.append(json.dumps(sample_rows, indent=2, default=str))
 
-            context_lines.append("")
-            context_lines.append("Requested symbol meanings:")
-            for sym in missing_syms:
-                if sym in SYMBOL_HINTS:
-                    context_lines.append(f"- {sym}: {SYMBOL_HINTS[sym]}")
+            #context_lines.append("")
+            #context_lines.append("Requested symbol meanings:")
+            #for sym in missing_syms:
+            #    if sym in SYMBOL_HINTS:
+            #        context_lines.append(f"- {sym}: {SYMBOL_HINTS[sym]}")
 
-            context = "\n".join(context_lines)
+            #context = "\n".join(context_lines)
 
             all_data: Dict[str, Any] = {}
             chunk_raw_map: Dict[str, str] = {}
@@ -576,11 +800,31 @@ Dataset context:
 
             details["prompt_sources"]["semantic_metric_inference"] = prompt_source
 
+            base_context = "\n".join(context_lines)
+
             for chunk in _chunk_list(missing_syms, chunk_size):
+                chunk_context_lines = [base_context]
+
+                chunk_hint_lines = []
+                for sym in chunk:
+                    if sym in SYMBOL_HINTS:
+                        chunk_hint_lines.append(f"- {sym}: {SYMBOL_HINTS[sym]}")
+
+                if chunk_hint_lines:
+                    chunk_context_lines.append("")
+                    chunk_context_lines.append("Requested symbol meanings:")
+                    chunk_context_lines.extend(chunk_hint_lines)
+
+                chunk_context = "\n".join(chunk_context_lines)
+
                 prompt = prompt_template.format(
                     requested_symbols=", ".join(chunk),
-                    context=context,
+                    context=chunk_context,
                 )
+                if DEBUG_PRINT_PROMPTS:
+                    print("\n--- SEMANTIC PROMPT START ---\n")
+                    print(prompt)
+                    print("\n--- SEMANTIC PROMPT END ---\n")
 
                 raw = llm_runner(prompt, 160)
 

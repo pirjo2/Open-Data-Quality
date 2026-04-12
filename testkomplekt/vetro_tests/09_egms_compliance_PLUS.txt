@@ -1,9 +1,9 @@
-Title: Influenza vaccination
-Description: This dataset contains influenza vaccination statistics by county and age group.
-Identifier: opendata_flu_vaccination_location_agegroup
-Publisher: Health Board
-Coverage: Estonia
-Language: en
-Source: Health Information System
-Date of creation: 2026-01-10
-Category: Health
+Title: Population by county in 2024
+Description: Official statistics on resident population by Estonian county.
+Publisher: Statistics Estonia
+Source: Population Register
+Date of creation: 2025-01-15
+Coverage: Estonia, 2024
+Language: English
+Identifier: population-county-2024
+Category: Demography
