@@ -35,6 +35,15 @@ OPENAI_MODEL_OPTIONS = [
 UPLOAD_MODE = "Upload file"
 TRINO_MODE = "Trino SQL query (advanced)"
 
+APP_AUTHOR = "Pirjo Vainjärv"
+APP_SUPERVISOR = "Kristo Raun"
+COMMON_FILE_TYPES = ["csv", "tsv", "txt", "xls", "xlsx", "json", "yaml", "yml"]
+SUPPORTED_FILE_TYPES_HELP = "Supported formats: CSV, TSV, TXT, XLS, XLSX, JSON, YAML, YML."
+METADATA_FILE_HELP = (
+    "Supported formats: CSV, TSV, TXT, XLS, XLSX, JSON, YAML, YML. "
+    "For tabular metadata, use a 2-column key/value file or a single-row table."
+)
+
 DIMENSION_ORDER = [
     "traceability",
     "currentness",
@@ -45,7 +54,6 @@ DIMENSION_ORDER = [
     "accuracy",
 ]
 
-COMMON_FILE_TYPES = ["csv", "tsv", "txt", "xls", "xlsx", "json", "yaml", "yml"]
 DEFAULT_RECOMMENDATION_TEMPLATE = """
 You are reviewing open data quality results.
 Dataset source mode: {data_source}
@@ -574,25 +582,18 @@ st.title("Open Data Quality")
 with st.expander("More info", expanded=False):
     st.markdown(
         f"""
-        **Author: Pirjo Vainjärv**  
-        **Supervisor: Kristo Raun**
+        **Author:** {APP_AUTHOR}  
+        **Supervisor:** {APP_SUPERVISOR}
 
         This Streamlit prototype evaluates open datasets with the Vetrò et al. (2016) framework and an AI-assisted workflow.
 
-        The app combines:
-        - structure-based checks from the uploaded table or SQL result
-        - optional metadata from text or file upload
-        - AI-based inference for missing semantic signals
+        It combines table-based checks, optional metadata inputs, and prompt-based semantic inference for missing signals.
         """
     )
 
-st.markdown(
-    '<div class="top-note"><div class="section-title">Choose data source</div><div class="section-subtitle">Use file upload for the common workflow, or Trino when you already have direct query access.</div></div>',
-    unsafe_allow_html=True,
-)
-
+st.subheader("Data source")
 data_source = st.radio(
-    "Dataset source",
+    "Data source",
     options=[UPLOAD_MODE, TRINO_MODE],
     index=0,
     horizontal=True,
@@ -600,9 +601,11 @@ data_source = st.radio(
 )
 
 base_prompts_cfg = load_prompts_cfg(PROMPTS_YAML)
-prompt_regime = "few_shot"
+prompt_regime_options = list((base_prompts_cfg.get("prompt_regimes") or {}).keys()) or ["few_shot"]
+default_prompt_index = prompt_regime_options.index("few_shot") if "few_shot" in prompt_regime_options else 0
+prompt_regime = prompt_regime_options[default_prompt_index]
 
-st.markdown("### Dataset input")
+st.subheader("Dataset input")
 uploaded_file = None
 trino_host = ""
 trino_port = 443
@@ -617,7 +620,7 @@ if data_source == UPLOAD_MODE:
     uploaded_file = st.file_uploader(
         "Input file",
         type=COMMON_FILE_TYPES,
-        help="Drag and drop the dataset file here.",
+        help=SUPPORTED_FILE_TYPES_HELP,
     )
 else:
     trino_left_col, trino_right_col = st.columns([1, 1.6], gap="large")
@@ -651,7 +654,7 @@ else:
             ),
         )
 
-st.markdown("### AI settings")
+st.subheader("AI settings")
 use_llm = True
 ai_row_1a, ai_row_1b, ai_row_1c = st.columns([1, 1, 1], gap="large")
 
@@ -661,7 +664,7 @@ with ai_row_1a:
         min_value=0,
         value=0 if data_source == TRINO_MODE else 500_000,
         step=10_000,
-        help="0 means all rows for uploaded files.",
+        help="0 means all rows for uploaded files. For Trino, the query itself controls the row count.",
         disabled=data_source == TRINO_MODE,
     )
 
@@ -687,7 +690,7 @@ with ai_row_1c:
             index=0,
         )
 
-ai_row_2a, ai_row_2b = st.columns([4, 1.7], gap="large")
+ai_row_2a, ai_row_2b = st.columns([4, 1.5], gap="large")
 with ai_row_2a:
     if llm_provider == "openai":
         openai_api_key = st.text_input("OpenAI API key", type="password", value="")
@@ -711,20 +714,20 @@ with ai_row_2b:
                 model_name=llm_model_name,
                 api_key=openai_api_key,
             )
-            raw = runner("Return exactly 3 lines:\nanswer: 1\nconfidence: 0.9\nevidence: test", 64)
+            raw = runner("Return exactly 3 lines:\\nanswer: 1\\nconfidence: 0.9\\nevidence: test", 64)
             st.success("Connection worked.")
             st.code(raw)
         except Exception as exc:
             st.error(f"Connection test failed: {exc}")
 
-st.markdown("### Optional metadata")
+st.subheader("Optional metadata")
 meta_upload_col, meta_text_col = st.columns([1, 2], gap="large")
 
 with meta_upload_col:
     manual_meta_file = st.file_uploader(
         "Metadata file",
         type=COMMON_FILE_TYPES,
-        help="Optional metadata file for semantic signals.",
+        help=METADATA_FILE_HELP,
     )
 
 with meta_text_col:
@@ -732,16 +735,16 @@ with meta_text_col:
         "Metadata text",
         height=220,
         placeholder=get_metadata_placeholder(),
+        help="Paste metadata as key: value pairs, JSON, or YAML.",
     )
 
 with st.expander("Advanced settings", expanded=False):
     prompt_regime = st.selectbox(
         "Prompting strategy",
-        options=["zero_shot", "few_shot", "reasoning"],
-        index=1,
-        help="Prompt templates are loaded from prompts.yaml.",
+        options=prompt_regime_options,
+        index=default_prompt_index,
+        help="Select the prompt family loaded from prompts.yaml.",
     )
-    st.caption("Best place for prompt selection is here, under Advanced settings, because it changes methodology rather than the main input flow.")
 
 st.markdown("### Run assessment")
 run_btn = st.button("Run assessment", type="primary")
