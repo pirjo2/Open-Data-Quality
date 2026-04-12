@@ -573,8 +573,8 @@ st.title("Open Data Quality")
 with st.expander("More info", expanded=False):
     st.markdown(
         f"""
-        **Author:** {APP_AUTHOR}  
-        **Supervisor:** {APP_SUPERVISOR}
+        **Author: Pirjo Vainjärv**   
+        **Supervisor: Kristo Raun**
 
         This Streamlit prototype evaluates open datasets with the Vetrò et al. (2016) framework and an AI-assisted workflow.
 
