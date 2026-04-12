@@ -35,11 +35,6 @@ OPENAI_MODEL_OPTIONS = [
 UPLOAD_MODE = "Upload file"
 TRINO_MODE = "Trino SQL query (advanced)"
 
-
-APP_AUTHOR = "Pirjo Jõelo"
-APP_SUPERVISOR = "[add supervisor name]"
-COMMON_FILE_TYPES = ["csv", "tsv", "txt", "xls", "xlsx", "json", "yaml", "yml"]
-
 DIMENSION_ORDER = [
     "traceability",
     "currentness",
@@ -590,12 +585,17 @@ with st.expander("More info", expanded=False):
         """
     )
 
-st.subheader("Data source")
+st.markdown(
+    '<div class="top-note"><div class="section-title">Choose data source</div><div class="section-subtitle">Use file upload for the common workflow, or Trino when you already have direct query access.</div></div>',
+    unsafe_allow_html=True,
+)
+
 data_source = st.radio(
-    "Data source",
+    "Dataset source",
     options=[UPLOAD_MODE, TRINO_MODE],
     index=0,
     horizontal=True,
+    label_visibility="collapsed",
 )
 
 base_prompts_cfg = load_prompts_cfg(PROMPTS_YAML)
@@ -613,38 +613,42 @@ trino_sql = ""
 trino_meta_sql = ""
 
 if data_source == UPLOAD_MODE:
-    st.caption("Supported dataset formats: CSV, TSV, TXT, Excel, JSON, YAML.")
     uploaded_file = st.file_uploader(
         "Input file",
         type=COMMON_FILE_TYPES,
         help="Drag and drop the dataset file here.",
     )
 else:
-    trino_host = st.text_input("Host", value="trino.avaandmeait.ee")
-    trino_port = st.number_input("Port", min_value=1, max_value=65535, value=443)
-    trino_catalog = st.text_input("Catalog", value="")
-    trino_schema = st.text_input("Schema", value="")
-    trino_user = st.text_input("Username", value="")
-    trino_password = st.text_input("Password", value="", type="password")
-    trino_sql = st.text_area(
-        "Data query",
-        height=180,
-        placeholder="SELECT * FROM some_table LIMIT 100000",
-    )
-    trino_meta_sql = st.text_area(
-        "Metadata query",
-        height=180,
-        placeholder=(
-            "SELECT\n"
-            "  title,\n"
-            "  notes AS description,\n"
-            "  metadata_created,\n"
-            "  metadata_modified,\n"
-            "  organization.name AS publisher\n"
-            "FROM landing.avaandmete_portaal.dataset_metadata\n"
-            "LIMIT 1"
-        ),
-    )
+    trino_left_col, trino_right_col = st.columns([1, 1.6], gap="large")
+
+    with trino_left_col:
+        trino_host = st.text_input("Host", value="trino.avaandmeait.ee")
+        trino_port = st.number_input("Port", min_value=1, max_value=65535, value=443)
+        trino_catalog = st.text_input("Catalog", value="")
+        trino_schema = st.text_input("Schema", value="")
+        trino_user = st.text_input("Username", value="")
+        trino_password = st.text_input("Password", value="", type="password")
+
+    with trino_right_col:
+        trino_sql = st.text_area(
+            "Data query",
+            height=220,
+            placeholder="SELECT * FROM some_table LIMIT 100000",
+        )
+        trino_meta_sql = st.text_area(
+            "Metadata query",
+            height=160,
+            placeholder=(
+                "SELECT\n"
+                "  title,\n"
+                "  notes AS description,\n"
+                "  metadata_created,\n"
+                "  metadata_modified,\n"
+                "  organization.name AS publisher\n"
+                "FROM landing.avaandmete_portaal.dataset_metadata\n"
+                "LIMIT 1"
+            ),
+        )
 
 st.markdown("### AI settings")
 use_llm = True
@@ -716,7 +720,6 @@ st.markdown("### Optional metadata")
 meta_upload_col, meta_text_col = st.columns([1, 2], gap="large")
 
 with meta_upload_col:
-    st.caption("Supported metadata formats: CSV, TSV, TXT, Excel, JSON, YAML.")
     manual_meta_file = st.file_uploader(
         "Metadata file",
         type=COMMON_FILE_TYPES,
@@ -737,6 +740,7 @@ with st.expander("Advanced settings", expanded=False):
         index=1,
         help="Prompt templates are loaded from prompts.yaml.",
     )
+    st.caption("Best place for prompt selection is here, under Advanced settings, because it changes methodology rather than the main input flow.")
 
 st.markdown("### Run assessment")
 run_btn = st.button("Run assessment", type="primary")
