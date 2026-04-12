@@ -35,10 +35,14 @@ OPENAI_MODEL_OPTIONS = [
 UPLOAD_MODE = "Upload file"
 TRINO_MODE = "Trino SQL query (advanced)"
 
-
 APP_AUTHOR = "Pirjo Vainjärv"
 APP_SUPERVISOR = "Kristo Raun"
 COMMON_FILE_TYPES = ["csv", "tsv", "txt", "xls", "xlsx", "json", "yaml", "yml"]
+SUPPORTED_FILE_TYPES_HELP = "Supported formats: CSV, TSV, TXT, XLS, XLSX, JSON, YAML, YML."
+METADATA_FILE_HELP = (
+    "Supported formats: CSV, TSV, TXT, XLS, XLSX, JSON, YAML, YML. "
+    "For tabular metadata, use a 2-column key/value file or a single-row table."
+)
 
 DIMENSION_ORDER = [
     "traceability",
@@ -51,18 +55,32 @@ DIMENSION_ORDER = [
 ]
 
 DEFAULT_RECOMMENDATION_TEMPLATE = """
-You are reviewing open data quality results.
-Dataset source mode: {data_source}
-Weakest metrics:
-{summary_yaml}
+You are reviewing the results of an open data quality assessment based on Vetrò-style dimensions.
+
+Dataset context:
+{dataset_context_yaml}
+
+Dimension scores:
+{dimension_scores_yaml}
+
+Lowest-scoring metrics:
+{weakest_metrics_yaml}
+
+Selected raw inputs and inferred signals:
+{raw_inputs_yaml}
 
 Write exactly 5 short markdown bullet points.
-Each bullet must:
-- explain what to improve
-- be concrete and actionable
-- stay under 24 words
-Do not mention confidence.
-Do not mention that you are an AI.
+
+Rules:
+- Base every recommendation only on the results above.
+- Prioritise the lowest scores first.
+- Mention the related metric or category in each bullet.
+- Explain what should be improved in the dataset, metadata, or publication workflow.
+- Give concrete actions, not generic advice.
+- Keep each bullet under 28 words.
+- Do not mention confidence.
+- Do not mention that you are an AI.
+- Do not invent missing facts.
 """.strip()
 
 
@@ -132,7 +150,7 @@ def inject_css() -> None:
     )
 
 
-def humanize_dimension(value: str) -> str:
+def capitalise_dimension(value: str) -> str:
     mapping = {
         "traceability": "Traceability",
         "currentness": "Currentness",
@@ -426,57 +444,81 @@ def get_prompt_template(cfg: Dict[str, Any], regime: str, name: str, fallback: s
         .get(name, fallback)
     ) or fallback
 
+def _make_prompt_safe(value: Any, max_list_items: int = 12, max_dict_items: int = 40) -> Any:
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        for idx, (k, v) in enumerate(value.items()):
+            if idx >= max_dict_items:
+                out["truncated"] = True
+                break
+            out[str(k)] = _make_prompt_safe(v, max_list_items=max_list_items, max_dict_items=10)
+        return out
+
+    if isinstance(value, (list, tuple)):
+        items = list(value)[:max_list_items]
+        out = [_make_prompt_safe(x, max_list_items=max_list_items, max_dict_items=10) for x in items]
+        if len(value) > max_list_items:
+            out.append("truncated")
+        return out
+
+    if value is None:
+        return None
+
+    if isinstance(value, float) and pd.isna(value):
+        return None
+
+    if isinstance(value, (str, int, float, bool)):
+        return value
+
+    return str(value)
 
 
 def build_ai_recommendation_prompt(
     metrics_df: pd.DataFrame,
+    dimension_scores: pd.DataFrame,
+    details: Dict[str, Any],
     data_source: str,
+    df: Optional[pd.DataFrame] = None,
     template: str = DEFAULT_RECOMMENDATION_TEMPLATE,
 ) -> str:
-    weakest = (
+    weakest_metrics_df = (
         metrics_df.sort_values("value_clamped", ascending=True)
-        .head(5)[["dimension", "metric_label", "metric_id", "value_clamped"]]
-        .to_dict(orient="records")
+        .head(7)[["dimension", "metric_label", "metric_id", "value", "value_clamped"]]
+        .copy()
     )
-    summary_yaml = yaml.safe_dump(weakest, sort_keys=False, allow_unicode=True)
-    return template.format(data_source=data_source, summary_yaml=summary_yaml)
+    weakest_metrics_df["dimension"] = weakest_metrics_df["dimension"].astype(str).apply(capitalise_dimension)
 
+    dimension_scores_df = dimension_scores.copy()
+    dimension_scores_df["dimension"] = dimension_scores_df["dimension"].astype(str).apply(capitalise_dimension)
 
-def build_quality_recommendations(metrics_df: pd.DataFrame) -> List[str]:
-    if metrics_df.empty:
-        return []
-
-    guidance = {
-        "traceability.track_of_creation": "Add a clear data source and an explicit creation date in the metadata.",
-        "traceability.track_of_updates": "Add update dates or a simple change log to document dataset updates.",
-        "currentness.percentage_of_current_rows": "Review time-related rows and clearly separate current and outdated records.",
-        "currentness.delay_in_publication": "Publish the dataset closer to the end of the reference period and include a publication date.",
-        "currentness.delay_after_expiration": "Refresh, archive, or replace expired datasets faster.",
-        "expiration.delay_after_expiration": "Refresh, archive, or replace expired datasets faster.",
-        "completeness.percentage_of_complete_cells": "Reduce missing values in key fields before publication.",
-        "completeness.percentage_of_complete_rows": "Improve row-level completeness for the most important records.",
-        "compliance.percentage_of_standardized_columns": "Use standardised formats, identifiers, and code lists where possible.",
-        "compliance.egms_compliance": "Add richer metadata such as title, description, publisher, identifier, language, category, source, and coverage.",
-        "compliance.five_stars_open_data": "Prefer machine-readable non-proprietary formats and publish reusable linked identifiers where relevant.",
-        "understandability.percentage_of_columns_with_metadata": "Add a column-level data dictionary or field descriptions.",
-        "understandability.percentage_of_columns_in_comprehensible_format": "Rename unclear columns and explain abbreviations or coded values.",
-        "accuracy.percentage_of_syntactically_accurate_cells": "Validate date, code, and numeric formats before publishing.",
-        "accuracy.accuracy_in_aggregation": "Cross-check totals and aggregates against row-level values.",
+    dataset_context = {
+        "data_source": data_source,
+        "rows_used": int(len(df)) if df is not None else None,
+        "column_count": int(len(df.columns)) if df is not None else None,
+        "columns_sample": [str(col) for col in list(df.columns[:20])] if df is not None else [],
     }
 
-    low_metrics = (
-        metrics_df.dropna(subset=["value_clamped"])
-        .sort_values("value_clamped", ascending=True)
-        .head(5)
-    )
+    raw_inputs = _make_prompt_safe(details.get("raw_inputs", {}) or {})
 
-    recommendations: List[str] = []
-    for _, row in low_metrics.iterrows():
-        metric_id = str(row.get("metric_id", "")).strip()
-        message = guidance.get(metric_id)
-        if message:
-            recommendations.append(f"{row['metric_label']} ({row['value_clamped']:.2f}): {message}")
-    return recommendations
+    dataset_context_yaml = yaml.safe_dump(dataset_context, sort_keys=False, allow_unicode=True)
+    dimension_scores_yaml = yaml.safe_dump(
+        dimension_scores_df[["dimension", "value_clamped"]].to_dict(orient="records"),
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    weakest_metrics_yaml = yaml.safe_dump(
+        weakest_metrics_df.to_dict(orient="records"),
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    raw_inputs_yaml = yaml.safe_dump(raw_inputs, sort_keys=False, allow_unicode=True)
+
+    return template.format(
+        dataset_context_yaml=dataset_context_yaml,
+        dimension_scores_yaml=dimension_scores_yaml,
+        weakest_metrics_yaml=weakest_metrics_yaml,
+        raw_inputs_yaml=raw_inputs_yaml,
+    )
 
 
 def apply_result_dimension_overrides(metrics_df: pd.DataFrame) -> pd.DataFrame:
@@ -513,7 +555,7 @@ def render_summary_cards(
             f"""
             <div class="summary-card">
                 <div class="summary-label">Strongest dimension</div>
-                <div class="summary-value">{humanize_dimension(best_dimension['dimension'])}</div>
+                <div class="summary-value">{capitalise_dimension(best_dimension['dimension'])}</div>
                 <div class="summary-small">Score: {best_dimension['value_clamped']:.2f}</div>
             </div>
             """,
@@ -524,7 +566,7 @@ def render_summary_cards(
             f"""
             <div class="summary-card">
                 <div class="summary-label">Weakest dimension</div>
-                <div class="summary-value">{humanize_dimension(weakest_dimension['dimension'])}</div>
+                <div class="summary-value">{capitalise_dimension(weakest_dimension['dimension'])}</div>
                 <div class="summary-small">Score: {weakest_dimension['value_clamped']:.2f}</div>
             </div>
             """,
@@ -559,7 +601,7 @@ def render_dimension_tiles(dimension_scores: pd.DataFrame) -> None:
                 st.markdown(
                     f"""
                     <div class="dimension-pill">
-                        <strong>{humanize_dimension(dim)}</strong>
+                        <strong>{capitalise_dimension(dim)}</strong>
                         <span>{label}</span>
                     </div>
                     """,
@@ -590,13 +632,9 @@ with st.expander("More info", expanded=False):
         """
     )
 
-st.markdown(
-    '<div class="top-note"><div class="section-title">Choose data source</div><div class="section-subtitle">Use file upload for the common workflow, or Trino when you already have direct query access.</div></div>',
-    unsafe_allow_html=True,
-)
-
+st.subheader("Data source")
 data_source = st.radio(
-    "Dataset source",
+    "Data source",
     options=[UPLOAD_MODE, TRINO_MODE],
     index=0,
     horizontal=True,
@@ -604,9 +642,11 @@ data_source = st.radio(
 )
 
 base_prompts_cfg = load_prompts_cfg(PROMPTS_YAML)
-prompt_regime = "few_shot"
+prompt_regime_options = list((base_prompts_cfg.get("prompt_regimes") or {}).keys()) or ["few_shot"]
+default_prompt_index = prompt_regime_options.index("few_shot") if "few_shot" in prompt_regime_options else 0
+prompt_regime = prompt_regime_options[default_prompt_index]
 
-st.markdown("### Dataset input")
+st.subheader("Dataset input")
 uploaded_file = None
 trino_host = ""
 trino_port = 443
@@ -618,40 +658,44 @@ trino_sql = ""
 trino_meta_sql = ""
 
 if data_source == UPLOAD_MODE:
-    st.caption("Supported dataset formats: CSV, TSV, TXT, Excel, JSON, YAML.")
     uploaded_file = st.file_uploader(
         "Input file",
         type=COMMON_FILE_TYPES,
-        help="Drag and drop the dataset file here.",
+        #help=SUPPORTED_FILE_TYPES_HELP,
     )
 else:
-    trino_host = st.text_input("Host", value="trino.avaandmeait.ee")
-    trino_port = st.number_input("Port", min_value=1, max_value=65535, value=443)
-    trino_catalog = st.text_input("Catalog", value="")
-    trino_schema = st.text_input("Schema", value="")
-    trino_user = st.text_input("Username", value="")
-    trino_password = st.text_input("Password", value="", type="password")
-    trino_sql = st.text_area(
-        "Data query",
-        height=180,
-        placeholder="SELECT * FROM some_table LIMIT 100000",
-    )
-    trino_meta_sql = st.text_area(
-        "Metadata query",
-        height=180,
-        placeholder=(
-            "SELECT\n"
-            "  title,\n"
-            "  notes AS description,\n"
-            "  metadata_created,\n"
-            "  metadata_modified,\n"
-            "  organization.name AS publisher\n"
-            "FROM landing.avaandmete_portaal.dataset_metadata\n"
-            "LIMIT 1"
-        ),
-    )
+    trino_left_col, trino_right_col = st.columns([1, 1.6], gap="large")
 
-st.markdown("### AI settings")
+    with trino_left_col:
+        trino_host = st.text_input("Host", value="trino.avaandmeait.ee")
+        trino_port = st.number_input("Port", min_value=1, max_value=65535, value=443)
+        trino_catalog = st.text_input("Catalog", value="")
+        trino_schema = st.text_input("Schema", value="")
+        trino_user = st.text_input("Username", value="")
+        trino_password = st.text_input("Password", value="", type="password")
+
+    with trino_right_col:
+        trino_sql = st.text_area(
+            "Data query",
+            height=220,
+            placeholder="SELECT * FROM some_table LIMIT 100000",
+        )
+        trino_meta_sql = st.text_area(
+            "Metadata query",
+            height=160,
+            placeholder=(
+                "SELECT\n"
+                "  title,\n"
+                "  notes AS description,\n"
+                "  metadata_created,\n"
+                "  metadata_modified,\n"
+                "  organization.name AS publisher\n"
+                "FROM landing.avaandmete_portaal.dataset_metadata\n"
+                "LIMIT 1"
+            ),
+        )
+
+st.subheader("AI settings")
 use_llm = True
 ai_row_1a, ai_row_1b, ai_row_1c = st.columns([1, 1, 1], gap="large")
 
@@ -661,7 +705,7 @@ with ai_row_1a:
         min_value=0,
         value=0 if data_source == TRINO_MODE else 500_000,
         step=10_000,
-        help="0 means all rows for uploaded files.",
+        help="0 means all rows for uploaded files. For Trino, the query itself controls the row count.",
         disabled=data_source == TRINO_MODE,
     )
 
@@ -687,7 +731,7 @@ with ai_row_1c:
             index=0,
         )
 
-ai_row_2a, ai_row_2b = st.columns([4, 1.7], gap="large")
+ai_row_2a, ai_row_2b = st.columns([4, 1.5], gap="large")
 with ai_row_2a:
     if llm_provider == "openai":
         openai_api_key = st.text_input("OpenAI API key", type="password", value="")
@@ -711,21 +755,20 @@ with ai_row_2b:
                 model_name=llm_model_name,
                 api_key=openai_api_key,
             )
-            raw = runner("Return exactly 3 lines:\nanswer: 1\nconfidence: 0.9\nevidence: test", 64)
+            raw = runner("Return exactly 3 lines:\\nanswer: 1\\nconfidence: 0.9\\nevidence: test", 64)
             st.success("Connection worked.")
             st.code(raw)
         except Exception as exc:
             st.error(f"Connection test failed: {exc}")
 
-st.markdown("### Optional metadata")
+st.subheader("Optional metadata")
 meta_upload_col, meta_text_col = st.columns([1, 2], gap="large")
 
 with meta_upload_col:
-    st.caption("Supported metadata formats: CSV, TSV, TXT, Excel, JSON, YAML.")
     manual_meta_file = st.file_uploader(
         "Metadata file",
         type=COMMON_FILE_TYPES,
-        help="Optional metadata file for semantic signals.",
+        help=METADATA_FILE_HELP,
     )
 
 with meta_text_col:
@@ -733,16 +776,16 @@ with meta_text_col:
         "Metadata text",
         height=220,
         placeholder=get_metadata_placeholder(),
+        help="Paste metadata as key: value pairs, JSON, or YAML.",
     )
 
 with st.expander("Advanced settings", expanded=False):
     prompt_regime = st.selectbox(
         "Prompting strategy",
-        options=["zero_shot", "few_shot", "reasoning"],
-        index=1,
-        help="Prompt templates are loaded from prompts.yaml.",
+        options=prompt_regime_options,
+        index=default_prompt_index,
+        help="Select the prompt family loaded from prompts.yaml.",
     )
-    st.caption("Best place for prompt selection is here, under Advanced settings, because it changes methodology rather than the main input flow.")
 
 st.markdown("### Run assessment")
 run_btn = st.button("Run assessment", type="primary")
@@ -880,6 +923,10 @@ if run_btn:
         st.markdown("---")
         st.markdown("## Results")
 
+        recommendation_prompt = ""
+        recommendation_raw = ""
+        recommendation_error = ""
+
         preview_tab, overview_tab, detail_tab, debug_tab = st.tabs(
             ["Preview", "Overview", "Detailed metrics", "Debug"]
         )
@@ -933,7 +980,7 @@ if run_btn:
                     )
                     dim_fig.update_yaxes(
                         tickvals=dimension_scores["dimension"].tolist(),
-                        ticktext=[humanize_dimension(x) for x in dimension_scores["dimension"].tolist()],
+                        ticktext=[capitalise_dimension(x) for x in dimension_scores["dimension"].tolist()],
                     )
                     dim_fig.update_layout(height=420)
                     st.plotly_chart(dim_fig, use_container_width=True)
@@ -941,33 +988,34 @@ if run_btn:
                 with reco_col:
                     st.markdown("### Suggested next improvements")
                     ai_recommendations = ""
+
                     if use_llm:
                         try:
+                            recommendation_prompt = build_ai_recommendation_prompt(
+                                metrics_df=metrics_non_null,
+                                dimension_scores=dimension_scores,
+                                details=details,
+                                data_source=data_source,
+                                df=df,
+                            )
+
                             reco_runner = get_llm_runner(
                                 provider=llm_provider,
                                 model_name=llm_model_name,
                                 api_key=openai_api_key,
                             )
-                            ai_recommendations = reco_runner(
-                                build_ai_recommendation_prompt(
-                                    metrics_non_null,
-                                    data_source,
-                                ),
-                                350,
-                            ).strip()
-                        except Exception:
-                            ai_recommendations = ""
+                            recommendation_raw = reco_runner(recommendation_prompt, 450).strip()
+                            ai_recommendations = recommendation_raw
+                        except Exception as exc:
+                            recommendation_error = str(exc)
 
                     with st.container(border=True):
                         if ai_recommendations:
                             st.markdown(ai_recommendations)
                         else:
-                            fallback_recommendations = build_quality_recommendations(metrics_non_null)
-                            if fallback_recommendations:
-                                for item in fallback_recommendations:
-                                    st.markdown(f"- {item}")
-                            else:
-                                st.caption("No specific recommendations were generated.")
+                            st.info("AI recommendations could not be generated for this run.")
+                            if recommendation_error:
+                                st.caption(recommendation_error)
 
         with detail_tab:
             metrics_non_null = metrics_df.dropna(subset=["value"]).copy()
@@ -976,7 +1024,7 @@ if run_btn:
             else:
                 metrics_non_null["value_clamped"] = metrics_non_null["value"].clip(0.0, 1.0)
                 metrics_non_null["dimension"] = metrics_non_null["dimension"].astype(str)
-                metrics_non_null["dimension_display"] = metrics_non_null["dimension"].apply(humanize_dimension)
+                metrics_non_null["dimension_display"] = metrics_non_null["dimension"].apply(capitalise_dimension)
 
                 metric_fig = px.bar(
                     metrics_non_null.sort_values(["dimension", "metric_label"]),
@@ -1026,6 +1074,17 @@ if run_btn:
             if llm_calls:
                 st.markdown("**LLM call details**")
                 st.json(llm_calls)
+            if recommendation_prompt:
+                st.markdown("**Recommendation prompt**")
+                st.code(recommendation_prompt)
+
+            if recommendation_raw:
+                st.markdown("**Recommendation raw output**")
+                st.code(recommendation_raw)
+
+            if recommendation_error:
+                st.markdown("**Recommendation error**")
+                st.write(recommendation_error)
 
     except Exception as exc:
         st.error(f"Assessment failed: {exc}")
