@@ -34,6 +34,7 @@ OPENAI_MODEL_OPTIONS = [
 
 UPLOAD_MODE = "Upload file"
 TRINO_MODE = "Trino SQL query (advanced)"
+COMMON_FILE_TYPES = ["csv", "tsv", "txt", "xls", "xlsx", "json", "yaml", "yml"]
 
 DIMENSION_ORDER = [
     "traceability",
