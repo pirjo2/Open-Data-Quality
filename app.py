@@ -45,6 +45,7 @@ DIMENSION_ORDER = [
     "accuracy",
 ]
 
+COMMON_FILE_TYPES = ["csv", "tsv", "txt", "xls", "xlsx", "json", "yaml", "yml"]
 DEFAULT_RECOMMENDATION_TEMPLATE = """
 You are reviewing open data quality results.
 Dataset source mode: {data_source}
