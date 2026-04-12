@@ -34,6 +34,10 @@ OPENAI_MODEL_OPTIONS = [
 
 UPLOAD_MODE = "Upload file"
 TRINO_MODE = "Trino SQL query (advanced)"
+
+
+APP_AUTHOR = "Pirjo Jõelo"
+APP_SUPERVISOR = "[add supervisor name]"
 COMMON_FILE_TYPES = ["csv", "tsv", "txt", "xls", "xlsx", "json", "yaml", "yml"]
 
 DIMENSION_ORDER = [
@@ -574,8 +578,8 @@ st.title("Open Data Quality")
 with st.expander("More info", expanded=False):
     st.markdown(
         f"""
-        **Author: Pirjo Vainjärv**   
-        **Supervisor: Kristo Raun**
+        **Author:** {APP_AUTHOR}  
+        **Supervisor:** {APP_SUPERVISOR}
 
         This Streamlit prototype evaluates open datasets with the Vetrò et al. (2016) framework and an AI-assisted workflow.
 
@@ -586,17 +590,12 @@ with st.expander("More info", expanded=False):
         """
     )
 
-st.markdown(
-    '<div class="top-note"><div class="section-title">Choose data source</div><div class="section-subtitle">Use file upload for the common workflow, or Trino when you already have direct query access.</div></div>',
-    unsafe_allow_html=True,
-)
-
+st.subheader("Data source")
 data_source = st.radio(
-    "Dataset source",
+    "Data source",
     options=[UPLOAD_MODE, TRINO_MODE],
     index=0,
     horizontal=True,
-    label_visibility="collapsed",
 )
 
 base_prompts_cfg = load_prompts_cfg(PROMPTS_YAML)
@@ -738,7 +737,6 @@ with st.expander("Advanced settings", expanded=False):
         index=1,
         help="Prompt templates are loaded from prompts.yaml.",
     )
-    st.caption("Best place for prompt selection is here, under Advanced settings, because it changes methodology rather than the main input flow.")
 
 st.markdown("### Run assessment")
 run_btn = st.button("Run assessment", type="primary")
