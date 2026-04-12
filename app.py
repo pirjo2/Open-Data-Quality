@@ -677,12 +677,12 @@ else:
     with trino_right_col:
         trino_sql = st.text_area(
             "Data query",
-            height=220,
+            height=250,
             placeholder="SELECT * FROM some_table LIMIT 100000",
         )
         trino_meta_sql = st.text_area(
             "Metadata query",
-            height=160,
+            height=250,
             placeholder=(
                 "SELECT\n"
                 "  title,\n"
