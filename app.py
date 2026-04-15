@@ -357,8 +357,13 @@ def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
                 return parse_text_metadata_content(text_content), text_content
         return parse_text_metadata_content(text_content), text_content
 
-    if suffix in {".xls", ".xlsx"}:
-        df = pd.read_excel(io.BytesIO(raw_bytes))
+    if suffix == ".xls":
+        df = pd.read_excel(io.BytesIO(raw_bytes), engine="xlrd")
+        text_content = df.to_csv(index=False)
+        return dataframe_to_metadata_dict(df), text_content
+
+    if suffix == ".xlsx":
+        df = pd.read_excel(io.BytesIO(raw_bytes), engine="openpyxl")
         text_content = df.to_csv(index=False)
         return dataframe_to_metadata_dict(df), text_content
 
