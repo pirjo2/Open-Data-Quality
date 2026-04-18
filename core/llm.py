@@ -612,14 +612,33 @@ def get_prompt_template_with_fallback(
 
     return fallback_template, "fallback"
 
+
+def _split_symbol_payload(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, Any]]:
+    if not isinstance(data, dict):
+        return {}, {}, {}
+
+    evidence_map = data.get("__evidence__", {})
+    confidence_map = data.get("__confidence__", {})
+
+    if not isinstance(evidence_map, dict):
+        evidence_map = {}
+    if not isinstance(confidence_map, dict):
+        confidence_map = {}
+
+    symbol_data = {
+        k: v for k, v in data.items()
+        if not str(k).startswith("__")
+    }
+    return symbol_data, evidence_map, confidence_map
+
 def infer_manual_metadata_symbols(
     text: str,
     llm_runner,
     prompts_cfg: Optional[Dict[str, Any]] = None,
     prompt_regime: str = "zero_shot",
-) -> Tuple[Dict[str, Any], str, str]:
+) -> Tuple[Dict[str, Any], str, str, Dict[str, Any]]:
     if not llm_runner or not text or not text.strip():
-        return {}, "", "not_used"
+        return {}, "", "not_used", {"evidence": {}, "confidence": {}, "parsed": {}}
 
     fallback_prompt = """
 Extract Vetrò metadata symbols from the text below.
@@ -628,13 +647,20 @@ Return ONLY valid JSON.
 Allowed keys:
 pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
 
+Output structure:
+{
+  "<symbol>": <value>,
+  "__evidence__": {"<symbol>": "<short evidence string>"},
+  "__confidence__": {"<symbol>": <0..1>}
+}
+
 Rules:
 - Presence keys must be 0 or 1
 - Date keys must be in YYYY-MM-DD format
 - Natural-language update frequency counts as lu=1
 - du=1 only if update dates are explicitly given
 - If uncertain, omit the key
-- No explanation, no markdown
+- Return JSON only
 
 Text:
 {text}
@@ -652,37 +678,55 @@ Text:
     try:
         raw = llm_runner(prompt, 96)
     except Exception as e:
-        return {}, f"LLM_ERROR: {e}", prompt_source
+        return {}, f"LLM_ERROR: {e}", prompt_source, {"evidence": {}, "confidence": {}, "parsed": {}}
 
     try:
         data = json.loads(raw)
         if not isinstance(data, dict):
-            return {}, raw, prompt_source
+            data = {}
+    except Exception:
+        return {}, raw, prompt_source, {"evidence": {}, "confidence": {}, "parsed": {}}
 
-        allowed_keys = {
-            "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
-            "dp", "sd", "edp", "ed", "cd", "lu", "du"
-        }
+    symbol_data, evidence_map, confidence_map = _split_symbol_payload(data)
 
-        cleaned: Dict[str, Any] = {}
-        for k, v in data.items():
-            if k not in allowed_keys:
-                continue
+    allowed_keys = {
+        "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
+        "dp", "sd", "edp", "ed", "cd", "lu", "du"
+    }
 
-            if k in {"dp", "sd", "edp", "ed", "cd"}:
-                if isinstance(v, str):
-                    m = re.search(r"\d{4}-\d{2}-\d{2}", v)
-                    if m:
-                        cleaned[k] = m.group(0)
-                continue
+    cleaned: Dict[str, Any] = {}
+    cleaned_evidence: Dict[str, str] = {}
+    cleaned_confidence: Dict[str, Any] = {}
 
+    for k, v in symbol_data.items():
+        if k not in allowed_keys:
+            continue
+
+        if k in {"dp", "sd", "edp", "ed", "cd"}:
+            if isinstance(v, str):
+                m = re.search(r"\d{4}-\d{2}-\d{2}", v)
+                if m:
+                    cleaned[k] = m.group(0)
+        else:
             if v in [0, 1]:
                 cleaned[k] = float(v)
+            elif isinstance(v, (int, float)):
+                cleaned[k] = float(v)
 
-        return cleaned, raw, prompt_source
+        if k in cleaned:
+            evid = evidence_map.get(k)
+            conf = confidence_map.get(k)
+            if evid is not None:
+                cleaned_evidence[k] = str(evid)
+            if conf is not None:
+                cleaned_confidence[k] = conf
 
-    except Exception:
-        return {}, raw, prompt_source    
+    debug = {
+        "parsed": data,
+        "evidence": cleaned_evidence,
+        "confidence": cleaned_confidence,
+    }
+    return cleaned, raw, prompt_source, debug
 
 '''def infer_manual_metadata_symbols(
     text: str,

@@ -562,7 +562,17 @@ def compute_metrics(
         "llm_raw": {},
         "llm_evidence": {},
         "prompt_sources": {},
+        "symbol_trace": {},
+        "formula_trace": {},
     }
+
+    def _record_symbol_trace(sym: str, value: Any, source: str, evidence: str = "", confidence: Any = None) -> None:
+        details["symbol_trace"][sym] = {
+            "value": value,
+            "source": source,
+            "evidence": evidence or "",
+            "confidence": confidence,
+        }
 
     # Collect symbols used by metrics
     required_symbols = set()
@@ -589,6 +599,7 @@ def compute_metrics(
         for sym, val in aggregation_auto.items():
             details["symbol_values"][sym] = val
             details["symbol_source"][sym] = "auto_aggregation"
+            _record_symbol_trace(sym, val, "auto_aggregation", evidence="Derived from table aggregation heuristics")
             env[sym] = val
         # AI infers currentness semantics, code computes ncr deterministically
     if auto_inputs.get("ncr") is None and use_llm and llm_runner is not None:
@@ -613,6 +624,13 @@ def compute_metrics(
 
             details["symbol_values"]["ncr"] = ncr
             details["symbol_source"]["ncr"] = "ai+auto"
+            details["llm_evidence"]["ncr"] = f"current_column={current_col}, current_value={current_val}"
+            _record_symbol_trace(
+                "ncr",
+                ncr,
+                "ai+auto",
+                evidence=f"Computed from currentness anchor: column={current_col}, current_value={current_val}",
+            )
             env["ncr"] = ncr
 
     cov = trino_metadata_raw.get("temporalcoverage")
@@ -621,6 +639,7 @@ def compute_metrics(
     if mod_date:
         details["symbol_values"]["du"] = 1.0
         details["symbol_source"]["du"] = "parser"
+        _record_symbol_trace("du", 1.0, "parser", evidence="modificationdate present in trino metadata raw")
 
     if isinstance(cov, str):
         years = re.findall(r"\d{4}", cov)
@@ -630,9 +649,11 @@ def compute_metrics(
 
             details["symbol_values"]["sd"] = sd_val
             details["symbol_source"]["sd"] = "parser"
+            _record_symbol_trace("sd", sd_val, "parser", evidence=f"Parsed from temporalcoverage: {cov}")
 
             details["symbol_values"]["edp"] = edp_val
             details["symbol_source"]["edp"] = "parser"
+            _record_symbol_trace("edp", edp_val, "parser", evidence=f"Parsed from temporalcoverage: {cov}")
 
     # --------- PRIORITY RESOLUTION: auto -> trino -> manual -> missing ----------
     details["llm_debug"] = {
@@ -652,6 +673,7 @@ def compute_metrics(
             val = manual_metadata[sym]
             details["symbol_values"][sym] = val
             details["symbol_source"][sym] = "manual"
+            _record_symbol_trace(sym, val, "manual", evidence="Provided by user/manual metadata")
             env[sym] = val
             continue
 
@@ -660,6 +682,7 @@ def compute_metrics(
             val = trino_metadata[sym]
             details["symbol_values"][sym] = val
             details["symbol_source"][sym] = "trino"
+            _record_symbol_trace(sym, val, "trino", evidence="Resolved from normalized Trino metadata")
             env[sym] = val
             continue
 
@@ -668,6 +691,7 @@ def compute_metrics(
             val = auto_inputs[sym]
             details["symbol_values"][sym] = val
             details["symbol_source"][sym] = "auto"
+            _record_symbol_trace(sym, val, "auto", evidence="Derived automatically from dataframe")
             env[sym] = val
             continue
 
@@ -708,7 +732,16 @@ def compute_metrics(
                 missing_syms.append(sym)
 
         details["llm_debug"]["missing_syms"] = list(missing_syms)
-        details["llm_debug"]["calls"] = []
+        details["llm_debug"]["calls"].append(
+            {
+                "symbols": list(chunk),
+                "prompt": prompt,
+                "raw": raw,
+                "parsed": data,
+                "evidence": evidence_data,
+                "confidence": confidence_data,
+            }
+        )
 
         # Only now build context
         if missing_syms:
@@ -835,6 +868,15 @@ Dataset context:
                     }
                 )
 
+                evidence_data = {}
+                confidence_data = {}
+
+                if isinstance(data, dict):
+                    if isinstance(data.get("__evidence__"), dict):
+                        evidence_data = data.get("__evidence__", {})
+                    if isinstance(data.get("__confidence__"), dict):
+                        confidence_data = data.get("__confidence__", {})
+
                 try:
                     data = json.loads(raw)
                     if not isinstance(data, dict):
@@ -843,6 +885,8 @@ Dataset context:
                     data = {}
 
                 for k, v in data.items():
+                    if str(k).startswith("__"):
+                        continue
                     all_data[k] = v
                     chunk_raw_map[k] = raw
 
@@ -891,8 +935,8 @@ Dataset context:
                         val = None
 
                 details["llm_raw"][sym] = chunk_raw_map.get(sym, "")
-                details["llm_confidence"][sym] = None
-                details["llm_evidence"][sym] = ""
+                details["llm_confidence"][sym] = confidence_data.get(sym)
+                details["llm_evidence"][sym] = str(evidence_data.get(sym, "") or "")
 
                 if details["symbol_source"].get(sym) in {"trino", "manual", "ai+auto"}:
                     continue
@@ -903,6 +947,13 @@ Dataset context:
                 else:
                     details["symbol_source"][sym] = "llm"
                     details["symbol_values"][sym] = val
+                    _record_symbol_trace(
+                        sym,
+                        val,
+                        "llm",
+                        evidence=details["llm_evidence"].get(sym, ""),
+                        confidence=details["llm_confidence"].get(sym),
+                    )
                     env[sym] = val
     # Convert date-like symbols into numeric
     for sym in ("sd", "edp", "ed", "cd", "dp"):
@@ -967,6 +1018,46 @@ Dataset context:
                 out_val = float(val)
             else:
                 out_val = None
+
+            input_map: Dict[str, str] = {}
+            for inp in inputs:
+                if isinstance(inp, dict):
+                    input_map.update(inp)
+
+            intermediate_values = {}
+            if interm:
+                if isinstance(interm, dict) and "assign" in interm:
+                    interm_list = [interm]
+                elif isinstance(interm, list):
+                    interm_list = [x for x in interm if isinstance(x, dict)]
+                else:
+                    interm_list = []
+                for ic in interm_list:
+                    assign_name = ic.get("assign")
+                    if assign_name:
+                        intermediate_values[assign_name] = env.get(assign_name)
+            else:
+                intermediate_values = {}
+
+            details["formula_trace"][metric_id] = {
+                "metric_label": label,
+                "dimension": dim,
+                "inputs": {
+                    input_name: {
+                        "symbol": symbol_name,
+                        "raw_value": details["symbol_values"].get(symbol_name),
+                        "numeric_env_value": env.get(symbol_name),
+                        "source": details["symbol_source"].get(symbol_name),
+                        "evidence": details["symbol_trace"].get(symbol_name, {}).get("evidence", ""),
+                    }
+                    for input_name, symbol_name in input_map.items()
+                },
+                "intermediate_values": intermediate_values,
+                "formula_assign": f_assign,
+                "formula_value": env.get(f_assign),
+                "normalised_assign": n_assign,
+                "result": out_val,
+            }
 
             rows.append(
                 {

@@ -122,7 +122,17 @@ prompt_regimes:
     manual_metadata_extraction: |
       Extract Vetrò metadata symbols from the text below.
 
-      Return ONLY valid JSON.
+      Return ONLY valid JSON in this structure:
+      {
+        "<symbol>": <value>,
+        "__evidence__": {
+          "<symbol>": "<short evidence string>"
+        },
+        "__confidence__": {
+          "<symbol>": <number between 0 and 1>
+        }
+      }
+      
       Allowed keys:
       pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
 
@@ -163,6 +173,17 @@ prompt_regimes:
     semantic_metric_inference: |
       You are evaluating metadata and table semantics for an open dataset.
 
+      Return ONLY valid JSON in this structure:
+      {
+        "<symbol>": <value>,
+        "__evidence__": {
+          "<symbol>": "<short evidence string>"
+        },
+        "__confidence__": {
+          "<symbol>": <number between 0 and 1>
+        }
+      }
+
       Infer the requested Vetrò symbols from:
       - raw metadata text
       - portal metadata JSON
@@ -190,7 +211,16 @@ prompt_regimes:
     manual_metadata_extraction: |
       Extract Vetrò metadata symbols from the text below.
 
-      Return ONLY valid JSON.
+      Return ONLY valid JSON in this structure:
+      {
+        "<symbol>": <value>,
+        "__evidence__": {
+          "<symbol>": "<short evidence string>"
+        },
+        "__confidence__": {
+          "<symbol>": <number between 0 and 1>
+        }
+      }
 
       Example:
       Text: This dataset is updated every Monday.
@@ -242,7 +272,16 @@ prompt_regimes:
     semantic_metric_inference: |
       You are evaluating metadata and table semantics for an open dataset.
 
-      Return ONLY valid JSON.
+      Return ONLY valid JSON in this structure:
+      {
+        "<symbol>": <value>,
+        "__evidence__": {
+          "<symbol>": "<short evidence string>"
+        },
+        "__confidence__": {
+          "<symbol>": <number between 0 and 1>
+        }
+      }
 
       Example:
       Requested symbols:
@@ -283,9 +322,19 @@ prompt_regimes:
     manual_metadata_extraction: |
       Extract Vetrò metadata symbols conservatively from the text below.
 
+      Return ONLY valid JSON in this structure:
+      {
+        "<symbol>": <value>,
+        "__evidence__": {
+          "<symbol>": "<short evidence string>"
+        },
+        "__confidence__": {
+          "<symbol>": <number between 0 and 1>
+        }
+      }
+
       Infer meaning from natural language, but do not invent facts.
 
-      Return ONLY valid JSON.
       Allowed keys:
       pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
 
@@ -325,6 +374,17 @@ prompt_regimes:
 
     semantic_metric_inference: |
       You are evaluating metadata and table semantics for an open dataset.
+
+      Return ONLY valid JSON in this structure:
+      {
+        "<symbol>": <value>,
+        "__evidence__": {
+          "<symbol>": "<short evidence string>"
+        },
+        "__confidence__": {
+          "<symbol>": <number between 0 and 1>
+        }
+      }
 
       Infer the requested Vetrò symbols conservatively from:
       - raw metadata text

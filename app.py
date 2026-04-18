@@ -817,6 +817,11 @@ if run_btn:
         manual_metadata_prompt_source = "not_used"
         manual_metadata_llm_raw = ""
         manual_metadata_llm: Dict[str, Any] = {}
+        manual_metadata_llm_debug: Dict[str, Any] = {
+            "evidence": {},
+            "confidence": {},
+            "parsed": {},
+        }
 
         if use_llm and combined_manual_meta_text.strip():
             try:
@@ -826,7 +831,12 @@ if run_btn:
                     api_key=openai_api_key,
                 )
                 prompts_cfg_runtime = load_prompts_cfg(prompts_yaml_path)
-                manual_metadata_llm, manual_metadata_llm_raw, manual_metadata_prompt_source = infer_manual_metadata_symbols(
+                (
+                    manual_metadata_llm,
+                    manual_metadata_llm_raw,
+                    manual_metadata_prompt_source,
+                    manual_metadata_llm_debug,
+                ) = infer_manual_metadata_symbols(
                     combined_manual_meta_text,
                     llm_runner,
                     prompts_cfg=prompts_cfg_runtime,
@@ -916,6 +926,11 @@ if run_btn:
                 trino_metadata_raw=trino_metadata_raw if data_source == TRINO_MODE else {},
             )
 
+        details["manual_metadata_llm"] = manual_metadata_llm
+        details["manual_metadata_llm_raw"] = manual_metadata_llm_raw
+        details["manual_metadata_prompt_source"] = manual_metadata_prompt_source
+        details["manual_metadata_llm_debug"] = manual_metadata_llm_debug
+                
         metrics_df = apply_result_dimension_overrides(metrics_df)
         metrics_df["value"] = metrics_df["value"].apply(
             lambda x: float(x) if isinstance(x, (int, float)) else None
@@ -1055,6 +1070,46 @@ if run_btn:
                 )
 
         with debug_tab:
+            st.subheader("Debug information")
+
+            st.markdown("### Manual metadata LLM extraction")
+            st.write(f"Prompt source: {details.get('manual_metadata_prompt_source', 'not_used')}")
+            st.json(details.get("manual_metadata_llm", {}))
+            st.json(details.get("manual_metadata_llm_debug", {}))
+            if details.get("manual_metadata_llm_raw"):
+                st.code(details["manual_metadata_llm_raw"], language="json")
+
+            st.markdown("### Symbol trace")
+            st.json(details.get("symbol_trace", {}))
+
+            st.markdown("### Formula trace")
+            formula_trace = details.get("formula_trace", {})
+            if formula_trace:
+                selected_metric = st.selectbox(
+                    "Choose metric trace",
+                    options=list(formula_trace.keys()),
+                )
+                st.json(formula_trace[selected_metric])
+            else:
+                st.info("No formula trace available.")
+
+            st.markdown("### LLM semantic calls")
+            llm_calls = details.get("llm_debug", {}).get("calls", [])
+            if llm_calls:
+                for idx, call in enumerate(llm_calls, start=1):
+                    with st.expander(f"LLM call {idx}: {', '.join(call.get('symbols', []))}"):
+                        if call.get("prompt"):
+                            st.code(call["prompt"], language="text")
+                        if call.get("parsed") is not None:
+                            st.json(call["parsed"])
+                        if call.get("raw"):
+                            st.code(call["raw"], language="json")
+            else:
+                st.info("No semantic LLM calls recorded.")
+
+            st.markdown("### Existing details JSON")
+            st.json(details)
+
             st.markdown("**Auto-derived inputs / inferred symbols**")
             st.json(details.get("raw_inputs", {}))
             st.markdown("**Metric evaluation details**")
