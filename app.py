@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import streamlit.components.v1 as components
 
 import pandas as pd
 import plotly.express as px
@@ -812,6 +813,8 @@ with st.expander("Advanced settings", expanded=False):
 
 st.markdown("### Run assessment")
 run_btn = st.button("Run assessment", type="primary")
+if run_btn:
+    st.session_state["scroll_to_results"] = True
 
 if run_btn:
     prompts_yaml_path = PROMPTS_YAML
@@ -965,6 +968,8 @@ if run_btn:
             if df[col].dtype == "object":
                 df[col] = df[col].apply(lambda x: str(x) if isinstance(x, (dict, list, tuple)) else x)
 
+        st.markdown('<div id="results-anchor"></div>', unsafe_allow_html=True)
+
         st.markdown("---")
         st.markdown("## Results")
 
@@ -982,51 +987,90 @@ if run_btn:
             st.caption(f"{len(df)} rows × {len(df.columns)} columns used for metrics.")
 
         with overview_tab:
-            if metrics_df.empty or metrics_df["value"].dropna().empty:
+            if metrics_df.empty:
                 st.info("No metrics could be computed.")
             else:
-                metrics_non_null = metrics_df.dropna(subset=["value"]).copy()
-                metrics_non_null["value_clamped"] = metrics_non_null["value"].clip(0.0, 1.0)
-                metrics_non_null["dimension"] = pd.Categorical(
-                    metrics_non_null["dimension"],
+                NULL_BAR_EPS = 0.000001
+
+                metrics_all = metrics_df.copy()
+                metrics_all["dimension"] = pd.Categorical(
+                    metrics_all["dimension"],
                     categories=DIMENSION_ORDER,
                     ordered=True,
                 )
 
-                dimension_scores = (
-                    metrics_non_null.groupby("dimension", as_index=False)["value_clamped"]
-                    .mean()
-                    .sort_values("dimension")
-                )
-                dimension_scores = dimension_scores.dropna(subset=["dimension"])
+                metrics_non_null = metrics_all.dropna(subset=["value"]).copy()
+                if not metrics_non_null.empty:
+                    metrics_non_null["value_clamped"] = metrics_non_null["value"].clip(0.0, 1.0)
 
-                overall_score = metrics_non_null["value_clamped"].mean()
-                best_dimension = dimension_scores.sort_values("value_clamped", ascending=False).iloc[0]
-                weakest_dimension = dimension_scores.sort_values("value_clamped", ascending=True).iloc[0]
-                weakest_metric = metrics_non_null.sort_values("value_clamped", ascending=True).iloc[0]
+                # Keep ALL dimensions in overview, even if their score is NULL
+                dimension_scores = pd.DataFrame({"dimension": DIMENSION_ORDER})
+                if not metrics_non_null.empty:
+                    dimension_means = (
+                        metrics_non_null.groupby("dimension", as_index=False)["value_clamped"]
+                        .mean()
+                    )
+                    dimension_scores = dimension_scores.merge(
+                        dimension_means,
+                        on="dimension",
+                        how="left",
+                    )
+                else:
+                    dimension_scores["value_clamped"] = pd.NA
 
-                render_summary_cards(overall_score, best_dimension, weakest_dimension, weakest_metric)
-                st.markdown("")
+                available_dimension_scores = dimension_scores.dropna(subset=["value_clamped"]).copy()
+
+                # Summary cards only for dimensions that actually have numeric values
+                if not metrics_non_null.empty and not available_dimension_scores.empty:
+                    overall_score = metrics_non_null["value_clamped"].mean()
+                    best_dimension = available_dimension_scores.sort_values("value_clamped", ascending=False).iloc[0]
+                    weakest_dimension = available_dimension_scores.sort_values("value_clamped", ascending=True).iloc[0]
+                    weakest_metric = metrics_non_null.sort_values("value_clamped", ascending=True).iloc[0]
+
+                    render_summary_cards(overall_score, best_dimension, weakest_dimension, weakest_metric)
+                    st.markdown("")
+                else:
+                    st.info("No dimensions with numeric values are available for summary cards.")
+
+                # Tiles already support missing values -> "Not available"
                 render_dimension_tiles(dimension_scores)
 
                 chart_col, reco_col = st.columns([1.2, 0.9], gap="large")
+
                 with chart_col:
                     st.markdown("### Average score by category")
+
+                    dimension_chart = dimension_scores.copy()
+                    dimension_chart["dimension_display"] = dimension_chart["dimension"].astype(str).apply(capitalise_dimension)
+                    dimension_chart["value_for_chart"] = dimension_chart["value_clamped"].apply(
+                        lambda x: NULL_BAR_EPS if pd.isna(x) else float(max(0.0, min(x, 1.0)))
+                    )
+                    dimension_chart["value_label"] = dimension_chart["value_clamped"].apply(
+                        lambda x: "NULL" if pd.isna(x) else f"{float(x):.2f}"
+                    )
+                    dimension_chart["status"] = dimension_chart["value_clamped"].apply(
+                        lambda x: "NULL / not enough data" if pd.isna(x) else "Computed"
+                    )
+
                     dim_fig = px.bar(
-                        dimension_scores,
-                        x="value_clamped",
-                        y="dimension",
+                        dimension_chart,
+                        x="value_for_chart",
+                        y="dimension_display",
                         orientation="h",
+                        text="value_label",
                         range_x=[0, 1],
                         labels={
-                            "dimension": "Category",
-                            "value_clamped": "Average normalised value (0–1)",
+                            "dimension_display": "Category",
+                            "value_for_chart": "Average normalised value (0–1)",
+                        },
+                        hover_data={
+                            "value_clamped": True,
+                            "status": True,
+                            "value_for_chart": False,
+                            "value_label": False,
                         },
                     )
-                    dim_fig.update_yaxes(
-                        tickvals=dimension_scores["dimension"].tolist(),
-                        ticktext=[capitalise_dimension(x) for x in dimension_scores["dimension"].tolist()],
-                    )
+                    dim_fig.update_traces(textposition="outside", cliponaxis=False)
                     dim_fig.update_layout(height=420)
                     st.plotly_chart(dim_fig, use_container_width=True)
 
@@ -1034,33 +1078,31 @@ if run_btn:
                     st.markdown("### Suggested next improvements")
                     ai_recommendations = ""
 
-                    if use_llm:
+                    if use_llm and not metrics_non_null.empty and not available_dimension_scores.empty:
                         try:
                             recommendation_prompt = build_ai_recommendation_prompt(
                                 metrics_df=metrics_non_null,
-                                dimension_scores=dimension_scores,
+                                dimension_scores=available_dimension_scores,
                                 details=details,
                                 data_source=data_source,
                                 df=df,
                             )
-
-                            reco_runner = get_llm_runner(
+                            llm_runner = get_llm_runner(
                                 provider=llm_provider,
                                 model_name=llm_model_name,
                                 api_key=openai_api_key,
                             )
-                            recommendation_raw = reco_runner(recommendation_prompt, 450).strip()
-                            ai_recommendations = recommendation_raw
+                            recommendation_raw = llm_runner(recommendation_prompt, 220)
+                            ai_recommendations = recommendation_raw.strip()
                         except Exception as exc:
                             recommendation_error = str(exc)
 
-                    with st.container(border=True):
-                        if ai_recommendations:
-                            st.markdown(ai_recommendations)
-                        else:
-                            st.info("AI recommendations could not be generated for this run.")
-                            if recommendation_error:
-                                st.caption(recommendation_error)
+                    if ai_recommendations:
+                        st.markdown(ai_recommendations)
+                    elif recommendation_error:
+                        st.warning(f"Recommendations could not be generated: {recommendation_error}")
+                    else:
+                        st.info("No recommendations available.")
 
         with detail_tab:
             metrics_table = metrics_df.copy()
@@ -1099,24 +1141,41 @@ if run_btn:
                 metrics_table["status"] = metrics_table.apply(_value_status, axis=1)
                 metrics_table["value_display"] = metrics_table["value"].apply(_value_display)
 
-                metrics_chart = metrics_table.dropna(subset=["value"]).copy()
+                NULL_BAR_EPS = 0.0000001
 
+                metrics_chart = metrics_table.copy()
+                metrics_chart["value_for_chart"] = metrics_chart["value"].apply(
+                    lambda x: NULL_BAR_EPS if pd.isna(x) else float(max(0.0, min(x, 1.0)))
+                )
+                metrics_chart["value_label"] = metrics_chart["value"].apply(
+                    lambda x: "NULL" if pd.isna(x) else f"{float(x):.2f}"
+                )
                 if not metrics_chart.empty:
                     metrics_chart["value_clamped"] = metrics_chart["value"].clip(0.0, 1.0)
 
                     metric_fig = px.bar(
                         metrics_chart.sort_values(["dimension", "metric_label"]),
-                        x="value_clamped",
+                        x="value_for_chart",
                         y="metric_label",
                         color="dimension_display",
+                        text="value_label",
                         orientation="h",
                         range_x=[0, 1],
                         labels={
                             "metric_label": "Metric",
-                            "value_clamped": "Normalised value (0–1)",
+                            "value_for_chart": "Normalised value (0–1)",
                             "dimension_display": "Category",
                         },
+                        hover_data={
+                            "value": True,
+                            "status": True,
+                            "missing_inputs": True,
+                            "value_for_chart": False,
+                            "value_label": False,
+                        },
                     )
+
+                    metric_fig.update_traces(textposition="outside", cliponaxis=False)
                     metric_fig.update_layout(height=680)
                     st.plotly_chart(metric_fig, use_container_width=True)
                 else:
@@ -1249,7 +1308,7 @@ if run_btn:
 
             if recommendation_error:
                 st.markdown("**Recommendation error**")
-                st.write(recommendation_error)
+                st.write(recommendation_error)   
 
     except Exception as exc:
         st.error(f"Assessment failed: {exc}")
@@ -1259,3 +1318,16 @@ if run_btn:
                 conn.close()
             except Exception:
                 pass
+    if st.session_state.get("scroll_to_results"):
+        components.html(
+            """
+            <script>
+            const anchor = window.parent.document.getElementById("results-anchor");
+            if (anchor) {
+                anchor.scrollIntoView({behavior: "smooth", block: "start"});
+            }
+            </script>
+            """,
+            height=0,
+        )
+        st.session_state["scroll_to_results"] = False 
