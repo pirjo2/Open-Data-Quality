@@ -1063,33 +1063,81 @@ if run_btn:
                                 st.caption(recommendation_error)
 
         with detail_tab:
-            metrics_non_null = metrics_df.dropna(subset=["value"]).copy()
-            if metrics_non_null.empty:
+            metrics_table = metrics_df.copy()
+
+            if metrics_table.empty:
                 st.info("No detailed metric table is available.")
             else:
-                metrics_non_null["value_clamped"] = metrics_non_null["value"].clip(0.0, 1.0)
-                metrics_non_null["dimension"] = metrics_non_null["dimension"].astype(str)
-                metrics_non_null["dimension_display"] = metrics_non_null["dimension"].apply(capitalise_dimension)
+                metrics_table["dimension"] = metrics_table["dimension"].astype(str)
+                metrics_table["dimension_display"] = metrics_table["dimension"].apply(capitalise_dimension)
 
-                metric_fig = px.bar(
-                    metrics_non_null.sort_values(["dimension", "metric_label"]),
-                    x="value_clamped",
-                    y="metric_label",
-                    color="dimension_display",
-                    orientation="h",
-                    range_x=[0, 1],
-                    labels={
-                        "metric_label": "Metric",
-                        "value_clamped": "Normalised value (0–1)",
-                        "dimension_display": "Category",
-                    },
-                )
-                metric_fig.update_layout(height=680)
-                st.plotly_chart(metric_fig, use_container_width=True)
+                formula_trace = details.get("formula_trace", {})
+
+                def _missing_inputs(metric_id: str) -> str:
+                    missing = formula_trace.get(metric_id, {}).get("missing_required_inputs", [])
+                    return ", ".join(missing) if missing else ""
+
+                def _value_status(row) -> str:
+                    metric_id = row["metric_id"]
+                    value = row["value"]
+                    missing = formula_trace.get(metric_id, {}).get("missing_required_inputs", [])
+
+                    if pd.isna(value):
+                        if missing:
+                            return "NULL (missing inputs)"
+                        return "NULL"
+                    if value == 0:
+                        return "0 (computed)"
+                    return "Computed"
+
+                def _value_display(x):
+                    if pd.isna(x):
+                        return "NULL"
+                    return x
+
+                metrics_table["missing_inputs"] = metrics_table["metric_id"].apply(_missing_inputs)
+                metrics_table["status"] = metrics_table.apply(_value_status, axis=1)
+                metrics_table["value_display"] = metrics_table["value"].apply(_value_display)
+
+                metrics_chart = metrics_table.dropna(subset=["value"]).copy()
+
+                if not metrics_chart.empty:
+                    metrics_chart["value_clamped"] = metrics_chart["value"].clip(0.0, 1.0)
+
+                    metric_fig = px.bar(
+                        metrics_chart.sort_values(["dimension", "metric_label"]),
+                        x="value_clamped",
+                        y="metric_label",
+                        color="dimension_display",
+                        orientation="h",
+                        range_x=[0, 1],
+                        labels={
+                            "metric_label": "Metric",
+                            "value_clamped": "Normalised value (0–1)",
+                            "dimension_display": "Category",
+                        },
+                    )
+                    metric_fig.update_layout(height=680)
+                    st.plotly_chart(metric_fig, use_container_width=True)
+                else:
+                    st.info("No metrics with numeric values are available for the chart.")
 
                 st.dataframe(
-                    metrics_non_null[["dimension_display", "metric_label", "value", "metric_id"]]
-                    .rename(columns={"dimension_display": "dimension"})
+                    metrics_table[
+                        [
+                            "dimension_display",
+                            "metric_label",
+                            "value_display",
+                            "status",
+                            "missing_inputs",
+                            "metric_id",
+                        ]
+                    ]
+                    .rename(columns={
+                        "dimension_display": "dimension",
+                        "value_display": "value",
+                        "missing_inputs": "missing_required_inputs",
+                    })
                     .sort_values(["dimension", "metric_id"]),
                     use_container_width=True,
                 )
@@ -1103,6 +1151,38 @@ if run_btn:
             st.json(details.get("manual_metadata_llm_debug", {}))
             if details.get("manual_metadata_llm_raw"):
                 st.code(details["manual_metadata_llm_raw"], language="json")
+
+            st.markdown("### Symbol status table")
+
+            symbol_trace = details.get("symbol_trace", {})
+            symbol_values = details.get("symbol_values", {})
+            symbol_source = details.get("symbol_source", {})
+
+            symbol_rows = []
+            for sym in sorted(set(symbol_values.keys()) | set(symbol_trace.keys())):
+                val = symbol_values.get(sym)
+                src = symbol_source.get(sym, "")
+                evidence = symbol_trace.get(sym, {}).get("evidence", "")
+                confidence = symbol_trace.get(sym, {}).get("confidence", None)
+
+                if pd.isna(val):
+                    status = "NULL / unresolved"
+                elif val == 0:
+                    status = "0 (explicit)"
+                else:
+                    status = "Resolved"
+
+                symbol_rows.append({
+                    "symbol": sym,
+                    "value": "NULL" if pd.isna(val) else val,
+                    "status": status,
+                    "source": src,
+                    "evidence": evidence,
+                    "confidence": confidence,
+                })
+
+            symbol_df = pd.DataFrame(symbol_rows)
+            st.dataframe(symbol_df, use_container_width=True)
 
             st.markdown("### Symbol trace")
             st.json(details.get("symbol_trace", {}))
