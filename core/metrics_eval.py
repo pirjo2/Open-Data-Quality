@@ -870,14 +870,21 @@ Dataset context:
                     }
                 )
 
+                try:
+                    data = json.loads(raw)
+                    if not isinstance(data, dict):
+                        data = {}
+                except Exception:
+                    data = {}
+
                 evidence_data = {}
                 confidence_data = {}
 
-                if isinstance(data, dict):
-                    if isinstance(data.get("__evidence__"), dict):
-                        evidence_data = data.get("__evidence__", {})
-                    if isinstance(data.get("__confidence__"), dict):
-                        confidence_data = data.get("__confidence__", {})
+                if isinstance(data.get("__evidence__"), dict):
+                    evidence_data = data.get("__evidence__", {})
+
+                if isinstance(data.get("__confidence__"), dict):
+                    confidence_data = data.get("__confidence__", {})
 
                 try:
                     data = json.loads(raw)
