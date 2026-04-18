@@ -662,6 +662,8 @@ def compute_metrics(
         "prompt_defs_available": bool(prompt_defs),
         "prompt_regimes_available": bool(prompts_cfg.get("prompt_regimes", {})),
         "required_symbols": sorted(required_symbols),
+        "missing_syms": [],
+        "calls": [],
     }
 
     for sym in sorted(required_symbols):
@@ -732,16 +734,16 @@ def compute_metrics(
                 missing_syms.append(sym)
 
         details["llm_debug"]["missing_syms"] = list(missing_syms)
-        details["llm_debug"]["calls"].append(
-            {
-                "symbols": list(chunk),
-                "prompt": prompt,
-                "raw": raw,
-                "parsed": data,
-                "evidence": evidence_data,
-                "confidence": confidence_data,
-            }
-        )
+        #details["llm_debug"]["calls"].append(
+        #    {
+        #        "symbols": list(chunk),
+        #        "prompt": prompt,
+        #        "raw": raw,
+        #        "parsed": data,
+        #        "evidence": evidence_data,
+        #        "confidence": confidence_data,
+        #    }
+        #)
 
         # Only now build context
         if missing_syms:
