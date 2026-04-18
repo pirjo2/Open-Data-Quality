@@ -798,6 +798,8 @@ def compute_metrics(
 
             all_data: Dict[str, Any] = {}
             chunk_raw_map: Dict[str, str] = {}
+            chunk_evidence_map = {}
+            chunk_confidence_map = {}
 
             fallback_prompt = """
 You are evaluating metadata and table semantics for an open dataset.
@@ -877,27 +879,16 @@ Dataset context:
                 except Exception:
                     data = {}
 
-                evidence_data = {}
-                confidence_data = {}
-
-                if isinstance(data.get("__evidence__"), dict):
-                    evidence_data = data.get("__evidence__", {})
-
-                if isinstance(data.get("__confidence__"), dict):
-                    confidence_data = data.get("__confidence__", {})
-
-                try:
-                    data = json.loads(raw)
-                    if not isinstance(data, dict):
-                        data = {}
-                except Exception:
-                    data = {}
+                evidence_data = data.get("__evidence__", {}) if isinstance(data.get("__evidence__"), dict) else {}
+                confidence_data = data.get("__confidence__", {}) if isinstance(data.get("__confidence__"), dict) else {}
 
                 for k, v in data.items():
                     if str(k).startswith("__"):
                         continue
                     all_data[k] = v
                     chunk_raw_map[k] = raw
+                    chunk_evidence_map[k] = str(evidence_data.get(k, "") or "")
+                    chunk_confidence_map[k] = confidence_data.get(k)
 
             date_symbols = {"dp", "sd", "edp", "ed", "cd"}
 
@@ -944,8 +935,8 @@ Dataset context:
                         val = None
 
                 details["llm_raw"][sym] = chunk_raw_map.get(sym, "")
-                details["llm_confidence"][sym] = confidence_data.get(sym)
-                details["llm_evidence"][sym] = str(evidence_data.get(sym, "") or "")
+                details["llm_confidence"][sym] = chunk_confidence_map.get(sym)
+                details["llm_evidence"][sym] = chunk_evidence_map.get(sym, "")
 
                 if details["symbol_source"].get(sym) in {"trino", "manual", "ai+auto"}:
                     continue
@@ -960,8 +951,8 @@ Dataset context:
                         sym,
                         val,
                         "llm",
-                        evidence=details["llm_evidence"].get(sym, ""),
-                        confidence=details["llm_confidence"].get(sym),
+                        evidence=chunk_evidence_map.get(sym, ""),
+                        confidence=chunk_confidence_map.get(sym),
                     )
                     env[sym] = val
     # Convert date-like symbols into numeric
@@ -1032,6 +1023,15 @@ Dataset context:
             for inp in inputs:
                 if isinstance(inp, dict):
                     input_map.update(inp)
+            
+            required_symbols_for_metric = list(input_map.values())
+            missing_required_inputs = [
+                sym for sym in required_symbols_for_metric
+                if details["symbol_values"].get(sym) is None
+            ]
+
+            if missing_required_inputs:
+                out_val = None
 
             intermediate_values = {}
             if interm:
@@ -1061,6 +1061,7 @@ Dataset context:
                     }
                     for input_name, symbol_name in input_map.items()
                 },
+                "missing_required_inputs": missing_required_inputs,
                 "intermediate_values": intermediate_values,
                 "formula_assign": f_assign,
                 "formula_value": env.get(f_assign),

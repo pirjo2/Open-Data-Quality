@@ -186,6 +186,24 @@ def parse_kv_metadata(text: str) -> Dict[str, Any]:
 def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     meta_l = {str(k).strip().lower(): v for k, v in (meta or {}).items()}
+    key_aliases = {
+        "publisher_name": "publisher",
+        "organisation": "organization",
+        "organisation_name": "organization",
+        "dataset_title": "title",
+        "name": "title",
+        "metadata_created": "metadata_created",
+        "created_at": "created",
+        "creation_date": "date_of_creation",
+        "metadata_modified": "metadata_modified",
+        "modified_at": "modified",
+        "update_date": "modified",
+    }
+
+    meta_l = {
+        key_aliases.get(k, k): v
+        for k, v in meta_l.items()
+    }
     direct_symbols = {
         "pb",
         "t",
@@ -842,8 +860,15 @@ if run_btn:
                     prompts_cfg=prompts_cfg_runtime,
                     prompt_regime=prompt_regime,
                 )
-                merged_manual_metadata = dict(manual_metadata_llm)
-                merged_manual_metadata.update(manual_metadata)
+                def _is_empty_or_weak_manual_value(x):
+                    return x is None or x == "" or x in {0, 0.0}
+
+                merged_manual_metadata = dict(manual_metadata)
+
+                for k, v in manual_metadata_llm.items():
+                    if _is_empty_or_weak_manual_value(merged_manual_metadata.get(k)) and v is not None:
+                        merged_manual_metadata[k] = v
+
                 manual_metadata = merged_manual_metadata
             except Exception:
                 pass
