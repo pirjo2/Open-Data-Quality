@@ -85,6 +85,13 @@ Rules:
 """.strip()
 
 
+def trino_query_to_df(conn, sql: str) -> pd.DataFrame:
+    cur = conn.cursor()
+    cur.execute(sql)
+    rows = cur.fetchall()
+    cols = [desc[0] for desc in cur.description] if cur.description else []
+    return pd.DataFrame(rows, columns=cols)
+
 def inject_css() -> None:
     st.markdown(
         """
@@ -773,7 +780,7 @@ with ai_row_2a:
 
 with ai_row_2b:
     st.markdown("<div style='height: 1.9rem;'></div>", unsafe_allow_html=True)
-    test_clicked = st.button("Test connection", use_container_width=True)
+    test_clicked = st.button("Test connection", width="stretch")
     if test_clicked:
         try:
             runner = get_llm_runner(
@@ -919,12 +926,12 @@ if run_btn:
                 conn_kwargs["auth"] = BasicAuthentication(trino_user.strip(), trino_password)
 
             conn = trino_connect(**conn_kwargs)
-            df = pd.read_sql(trino_sql, conn)
+            df = trino_query_to_df(conn, trino_sql)
             ext = ".sql"
 
             if trino_meta_sql.strip():
                 try:
-                    meta_df = pd.read_sql(trino_meta_sql, conn)
+                    meta_df = trino_query_to_df(conn, trino_meta_sql)
                     if not meta_df.empty:
                         trino_metadata_raw = meta_df.iloc[0].to_dict()
                         trino_metadata = normalize_metadata_to_symbols(trino_metadata_raw)
@@ -935,7 +942,11 @@ if run_btn:
             st.error("No data could be loaded from the selected data source.")
             st.stop()
 
-        df = make_arrow_safe(df)
+        #df = make_arrow_safe(df)
+        #df_preview = make_arrow_safe(df.head(20).copy())
+        df_preview = make_arrow_safe(df.head(200).copy())
+        #metrics_df_display = make_arrow_safe(metrics_df.copy())
+
         if ext is None:
             ext = ".table"
 
@@ -985,7 +996,8 @@ if run_btn:
 
         with preview_tab:
             st.subheader("Preview of the dataset")
-            st.dataframe(df.head(20), use_container_width=True)
+            #st.dataframe(df.head(20), use_container_width=True)
+            st.dataframe(df_preview, width="stretch")
             st.caption(f"{len(df)} rows × {len(df.columns)} columns used for metrics.")
 
         with overview_tab:
@@ -1074,7 +1086,7 @@ if run_btn:
                     )
                     dim_fig.update_traces(textposition="outside", cliponaxis=False)
                     dim_fig.update_layout(height=420)
-                    st.plotly_chart(dim_fig, use_container_width=True)
+                    st.plotly_chart(dim_fig, width="stretch")
 
                 with reco_col:
                     st.markdown("### Suggested next improvements")
@@ -1179,7 +1191,7 @@ if run_btn:
 
                     metric_fig.update_traces(textposition="outside", cliponaxis=False)
                     metric_fig.update_layout(height=680)
-                    st.plotly_chart(metric_fig, use_container_width=True)
+                    st.plotly_chart(metric_fig, width="stretch")
                 else:
                     st.info("No metrics with numeric values are available for the chart.")
 
@@ -1200,7 +1212,7 @@ if run_btn:
                         "missing_inputs": "missing_required_inputs",
                     })
                     .sort_values(["dimension", "metric_id"]),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         with debug_tab:
@@ -1243,7 +1255,7 @@ if run_btn:
                 })
 
             symbol_df = pd.DataFrame(symbol_rows)
-            st.dataframe(symbol_df, use_container_width=True)
+            st.dataframe(symbol_df, width="stretch")
 
             st.markdown("### Symbol trace")
             st.json(details.get("symbol_trace", {}))
@@ -1279,7 +1291,7 @@ if run_btn:
             st.markdown("**Auto-derived inputs / inferred symbols**")
             st.json(details.get("raw_inputs", {}))
             st.markdown("**Metric evaluation details**")
-            st.dataframe(metrics_df, use_container_width=True)
+            st.dataframe(metrics_df, width="stretch")
             st.markdown("**Prompt regime used**")
             st.write(prompt_regime)
             st.markdown("**LLM calls**")
