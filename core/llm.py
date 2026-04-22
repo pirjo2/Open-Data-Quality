@@ -18,6 +18,60 @@ YES_RE = re.compile(r"\b(yes|true|present|exists|available)\b", re.IGNORECASE)
 NO_RE = re.compile(r"\b(no|false|missing|absent|not available)\b", re.IGNORECASE)
 DEBUG_PRINT_PROMPTS = False
 
+
+def parse_llm_json_loose(raw_text: str) -> Dict[str, Any]:
+    """
+    Parse either:
+    1) one valid JSON object
+    2) multiple JSON objects concatenated together
+
+    Merge __evidence__ and __confidence__ maps when needed.
+    """
+    if not raw_text or not str(raw_text).strip():
+        return {}
+
+    raw_text = str(raw_text).strip()
+
+    # First: normal JSON
+    try:
+        data = json.loads(raw_text)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+
+    # Second: multiple JSON objects in one output
+    decoder = json.JSONDecoder()
+    idx = 0
+    objects = []
+
+    while idx < len(raw_text):
+        while idx < len(raw_text) and raw_text[idx].isspace():
+            idx += 1
+        if idx >= len(raw_text):
+            break
+
+        try:
+            obj, end_idx = decoder.raw_decode(raw_text, idx)
+            if isinstance(obj, dict):
+                objects.append(obj)
+            idx = end_idx
+        except json.JSONDecodeError:
+            idx += 1
+
+    if not objects:
+        return {}
+
+    merged: Dict[str, Any] = {}
+    for obj in objects:
+        for key, value in obj.items():
+            if key in {"__evidence__", "__confidence__"} and isinstance(value, dict):
+                merged.setdefault(key, {}).update(value)
+            else:
+                merged[key] = value
+
+    return merged
+
+
 def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     low = text.lower()
@@ -443,13 +497,7 @@ Respond ONLY in JSON.
         print(prompt)
         print("\n--- MANUAL_METADATA PROMPT END ---\n")
     raw = llm_runner(prompt, 128)
-
-    import json
-    try:
-        data = json.loads(raw)
-    except Exception:
-        return {}, raw
-
+    data = parse_llm_json_loose(raw)
     return data, raw
 
 def infer_symbol(
@@ -596,14 +644,10 @@ Text:
     except Exception as e:
         return {}, f"LLM_ERROR: {e}", prompt_source, {"evidence": {}, "confidence": {}, "parsed": {}}
 
-    try:
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            data = {}
-    except Exception:
+    data = parse_llm_json_loose(raw)
+    if not isinstance(data, dict) or not data:
         return {}, raw, prompt_source, {"evidence": {}, "confidence": {}, "parsed": {}}
-
-    symbol_data, evidence_map, confidence_map = _split_symbol_payload(data)
+        symbol_data, evidence_map, confidence_map = _split_symbol_payload(data)
 
     allowed_keys = {
         "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",

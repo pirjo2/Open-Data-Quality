@@ -8,7 +8,7 @@ import re
 import json
 
 import pandas as pd
-from core.llm import get_prompt_template_with_fallback
+from core.llm import get_prompt_template_with_fallback, parse_llm_json_loose
 
 DEBUG_PRINT_PROMPTS = False
 
@@ -453,6 +453,41 @@ def _filter_prompt_metadata(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         out[k] = v
     return out
 
+
+ALLOW_PARTIAL_RESULT_METRICS = {
+    "traceability.track_of_creation",
+    "traceability.track_of_updates",
+    "compliance.egms_compliance",
+    "compliance.five_stars_open_data",
+}
+
+def _metric_allows_partial_result(metric_id: str) -> bool:
+    return metric_id in ALLOW_PARTIAL_RESULT_METRICS
+
+def _finalise_metric_result(
+    metric_id: str,
+    normalised_value: Optional[float],
+    missing_required_inputs: list[str],
+) -> Optional[float]:
+    """
+    Strict metrics:
+        any missing required input -> None
+
+    Partial metrics:
+        if the normalised value is computable, keep it even when some
+        required inputs are missing.
+    """
+    if normalised_value is None:
+        return None
+
+    if _metric_allows_partial_result(metric_id):
+        return normalised_value
+
+    if missing_required_inputs:
+        return None
+
+    return normalised_value
+
 # --- Automaatsete sisendite arvutamine --- #
 def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, Any]:
     auto: Dict[str, Any] = {}
@@ -872,11 +907,8 @@ Dataset context:
                     }
                 )
 
-                try:
-                    data = json.loads(raw)
-                    if not isinstance(data, dict):
-                        data = {}
-                except Exception:
+                data = parse_llm_json_loose(raw)
+                if not isinstance(data, dict):
                     data = {}
 
                 evidence_data = data.get("__evidence__", {}) if isinstance(data.get("__evidence__"), dict) else {}
@@ -1013,25 +1045,28 @@ Dataset context:
             metric_id = f"{dim}.{metric_key}"
             label = label_map.get(metric_id, metric_id)
 
-            out_val: Optional[float]
+            normalised_val: Optional[float]
             if isinstance(val, (int, float)) and not math.isnan(val):
-                out_val = float(val)
+                normalised_val = float(val)
             else:
-                out_val = None
+                normalised_val = None
 
             input_map: Dict[str, str] = {}
             for inp in inputs:
                 if isinstance(inp, dict):
                     input_map.update(inp)
-            
+
             required_symbols_for_metric = list(input_map.values())
             missing_required_inputs = [
                 sym for sym in required_symbols_for_metric
                 if details["symbol_values"].get(sym) is None
             ]
 
-            if missing_required_inputs:
-                out_val = None
+            out_val = _finalise_metric_result(
+                metric_id=metric_id,
+                normalised_value=normalised_val,
+                missing_required_inputs=missing_required_inputs,
+            )
 
             intermediate_values = {}
             if interm:
@@ -1067,6 +1102,7 @@ Dataset context:
                 "formula_value": env.get(f_assign),
                 "normalised_assign": n_assign,
                 "result": out_val,
+                "null_policy": "allow_partial" if _metric_allows_partial_result(metric_id) else "strict",
             }
 
             rows.append(

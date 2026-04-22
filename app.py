@@ -519,7 +519,9 @@ def build_ai_recommendation_prompt(
         "data_source": data_source,
         "rows_used": int(len(df)) if df is not None else None,
         "column_count": int(len(df.columns)) if df is not None else None,
-        "columns_sample": [str(col) for col in list(df.columns[:20])] if df is not None else [],
+        "columns_sample": [str(col) for col in list(df.columns[:200])] if df is not None else [],
+        #ajutine
+        #"columns_sample": [str(col) for col in list(df.columns[:20])] if df is not None else [],
     }
 
     raw_inputs = _make_prompt_safe(details.get("raw_inputs", {}) or {})
