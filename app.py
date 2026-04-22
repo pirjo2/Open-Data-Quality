@@ -16,6 +16,8 @@ from core.llm import get_llm_runner, infer_manual_metadata_symbols
 from core.pipeline import run_quality_assessment
 from core.utils import make_arrow_safe
 
+from datetime import date, datetime
+from decimal import Decimal
 
 FORMULAS_YAML = "configs/formulas.yaml"
 PROMPTS_YAML = "configs/prompts.yaml"
@@ -84,13 +86,41 @@ Rules:
 - Do not invent missing facts.
 """.strip()
 
+def make_json_safe(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+
+    if isinstance(value, Decimal):
+        return float(value)
+
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+
+    if isinstance(value, dict):
+        return {str(k): make_json_safe(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [make_json_safe(v) for v in value]
+
+    return value
+
 
 def trino_query_to_df(conn, sql: str) -> pd.DataFrame:
     cur = conn.cursor()
     cur.execute(sql)
     rows = cur.fetchall()
     cols = [desc[0] for desc in cur.description] if cur.description else []
-    return pd.DataFrame(rows, columns=cols)
+
+    safe_rows = [
+        [make_json_safe(v) for v in row]
+        for row in rows
+    ]
+
+    return pd.DataFrame(safe_rows, columns=cols)
+
 
 def inject_css() -> None:
     st.markdown(
