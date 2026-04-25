@@ -4,11 +4,10 @@ from typing import Any, Dict, Tuple, Optional
 from itertools import combinations
 import math
 import re
-#from datetime import date as _date_type
 import json
 
 import pandas as pd
-from core.llm import get_prompt_template_with_fallback, parse_llm_json_loose
+from core.llm import get_prompt_template, parse_llm_json_loose
 
 DEBUG_PRINT_PROMPTS = False
 
@@ -261,12 +260,8 @@ Sample rows:
 {sample_rows}
 """
 
-    prompt_template, prompt_source = get_prompt_template_with_fallback(
-        prompts_cfg=prompts_cfg or {},
-        regime=prompt_regime,
-        prompt_name="currentness_anchor",
-        fallback_template=fallback_prompt,
-    )
+    prompt_template = get_prompt_template(prompt_defs, prompt_regime, prompt_key)
+    prompt_source = f"yaml:{prompt_regime}"
 
     prompt = prompt_template.format(
         manual_metadata_text=manual_metadata_text,
@@ -877,12 +872,8 @@ Dataset context:
 {context}
 """
 
-            prompt_template, prompt_source = get_prompt_template_with_fallback(
-                prompts_cfg=prompts_cfg,
-                regime=prompt_regime,
-                prompt_name="semantic_metric_inference",
-                fallback_template=fallback_prompt,
-            )
+            prompt_template = get_prompt_template(prompt_defs, prompt_regime, prompt_key)
+            prompt_source = f"yaml:{prompt_regime}"
 
             details["prompt_sources"]["semantic_metric_inference"] = prompt_source
 
