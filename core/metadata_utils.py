@@ -108,62 +108,115 @@ def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
 
 
 def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Accept either:
-      - direct symbols
-      - or common field names
-
-    Important:
-    - do NOT fabricate 0-values for fields that are not explicitly present
-    - only normalize fields that actually exist in `meta`
-    """
     out: Dict[str, Any] = {}
 
-    direct_symbols = {
-        "pb", "t", "d", "dc", "cv", "l", "id", "s",
-        "dp", "sd", "edp", "ed", "cd",
-        "lu", "du", "c",
+    meta_l = {str(k).strip().lower(): v for k, v in (meta or {}).items()}
+
+    key_aliases = {
+        "publisher_name": "publisher",
+        "organisation": "organization",
+        "organisation_name": "organization",
+        "dataset_title": "title",
+        "name": "title",
+        "metadata_created": "metadata_created",
+        "created_at": "created",
+        "creation_date": "date_of_creation",
+        "metadata_modified": "metadata_modified",
+        "modified_at": "modified",
+        "update_date": "modified",
     }
 
-    for k, v in meta.items():
-        kk = str(k).strip().lower()
-        if kk in direct_symbols:
-            out[kk] = v
+    meta_l = {
+        key_aliases.get(k, k): v
+        for k, v in meta_l.items()
+    }
 
-    def _is_missing(x: Any) -> bool:
+    direct_symbols = {
+        "pb",
+        "t",
+        "d",
+        "dc",
+        "cv",
+        "l",
+        "id",
+        "s",
+        "c",
+        "dp",
+        "sd",
+        "edp",
+        "ed",
+        "cd",
+        "lu",
+        "du",
+    }
+
+    for key, value in meta_l.items():
+        if key in direct_symbols:
+            out[key] = value
+
+    def _is_explicit_missing(x: Any) -> bool:
         if x is None:
             return True
         if isinstance(x, float) and pd.isna(x):
             return True
         if isinstance(x, str):
-            s = x.strip().lower()
-            return s in {"", "[]", "none", "null", "missing", "n/a", "na"}
+            return x.strip().lower() in {
+                "",
+                "none",
+                "null",
+                "missing",
+                "n/a",
+                "na",
+                "[]",
+                "not provided",
+                "not available",
+            }
         return False
 
-    def _set_presence(symbol: str, *keys: str) -> None:
+    def _presence_from_key(meta_dict: Dict[str, Any], *keys: str):
         for key in keys:
-            if key in meta:
-                out[symbol] = 0.0 if _is_missing(meta.get(key)) else 1.0
-                return
+            if key in meta_dict:
+                return 0.0 if _is_explicit_missing(meta_dict[key]) else 1.0
+        return None
 
-    def _set_date(symbol: str, *keys: str) -> None:
-        for key in keys:
-            if key in meta and not _is_missing(meta.get(key)):
-                out[symbol] = str(meta.get(key))
-                return
+    semantic_key_map = {
+        "t": ("title",),
+        "d": ("description", "notes"),
+        "pb": ("publisher", "organization", "org_name"),
+        "s": ("source",),
+        "dc": ("metadata_created", "issued", "created", "date_of_creation"),
+        "cv": ("coverage", "temporalcoverage"),
+        "l": ("language", "lang"),
+        "id": ("identifier", "dataset_id", "datasetidentifier"),
+        "c": ("category", "theme"),
+    }
 
-    _set_presence("t", "title")
-    _set_presence("d", "description", "notes")
-    _set_presence("pb", "publisher", "organization", "org_name")
-    _set_presence("s", "source")
-    _set_presence("dc", "metadata_created", "issued", "created", "date_of_creation")
-    _set_presence("cv", "coverage", "temporalcoverage")
-    _set_presence("l", "language", "lang")
-    _set_presence("id", "identifier", "dataset_id", "id")
-    _set_presence("c", "category", "theme")
-    _set_presence("lu", "updates", "update_history")
-    _set_presence("du", "update_dates", "updates")
+    for target_key, source_keys in semantic_key_map.items():
+        if target_key not in out:
+            value = _presence_from_key(meta_l, *source_keys)
+            if value is not None:
+                out[target_key] = value
 
-    _set_date("dp", "date_of_publication", "metadata_modified", "modified")
+    if "dp" not in out:
+        for key in [
+            "date_of_publication",
+            "metadata_modified",
+            "modified",
+            "releasedate",
+            "modificationdate",
+        ]:
+            if key in meta_l and str(meta_l[key]).strip():
+                out["dp"] = str(meta_l[key])
+                break
+
+    for field in ["sd", "edp", "ed", "cd"]:
+        if field not in out and field in meta_l:
+            out[field] = str(meta_l[field])
+
+    if "lu" not in out and "updates" in meta_l:
+        out["lu"] = 0.0 if _is_explicit_missing(meta_l["updates"]) else 1.0
+
+    if "du" not in out and "updates" in meta_l:
+        out["du"] = 0.0 if _is_explicit_missing(meta_l["updates"]) else None
 
     return {k: v for k, v in out.items() if v is not None}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Any, Dict, Optional, Tuple, Callable
+from core.metadata_utils import extract_symbols_from_realistic_text
 import json
 import os
 import re
@@ -70,92 +71,6 @@ def parse_llm_json_loose(raw_text: str) -> Dict[str, Any]:
                 merged[key] = value
 
     return merged
-
-
-def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
-    low = text.lower()
-
-    # ---------- test 2: updates ----------
-    if re.search(r"updates\s*:\s*\[\s*\]", low):
-        out["lu"] = 0.0
-        out["du"] = 0.0
-
-    if "update history" in low or "updated regularly" in low:
-        out["lu"] = 1.0
-
-    if re.search(r"updated on\s+\d{4}-\d{2}-\d{2}", low):
-        out["du"] = 1.0
-
-    # ---------- test 4: delay in publication ----------
-    m = re.search(
-        r"covers the period from\s+(20\d{2}-\d{2}-\d{2})\s+to\s+(20\d{2}-\d{2}-\d{2})",
-        low
-    )
-    if m:
-        out["sd"] = m.group(1)
-        out["edp"] = m.group(2)
-
-    m = re.search(r"published on\s+(20\d{2}-\d{2}-\d{2})", low)
-    if m:
-        out["dp"] = m.group(1)
-
-    # ---------- test 5: delay after expiration ----------
-    m = re.search(r"expired on\s+(20\d{2}-\d{2}-\d{2})", low)
-    if m:
-        out["ed"] = m.group(1)
-
-    m = re.search(r"became available on\s+(20\d{2}-\d{2}-\d{2})", low)
-    if m:
-        out["cd"] = m.group(1)
-
-    # ---------- test 9: eGMS positive / negative statements ----------
-    if re.search(r"^title\s*:", text, re.I | re.M):
-        out["t"] = 1.0
-    elif "title is missing" in low:
-        out["t"] = 0.0
-
-    if re.search(r"^description\s*:", text, re.I | re.M):
-        out["d"] = 1.0
-    elif "description is missing" in low:
-        out["d"] = 0.0
-
-    if re.search(r"^identifier\s*:", text, re.I | re.M):
-        out["id"] = 1.0
-    elif "no identifier" in low or "identifier is missing" in low:
-        out["id"] = 0.0
-
-    if re.search(r"^publisher\s*:", text, re.I | re.M):
-        out["pb"] = 1.0
-    elif "publisher is missing" in low:
-        out["pb"] = 0.0
-
-    if re.search(r"^coverage\s*:", text, re.I | re.M):
-        out["cv"] = 1.0
-    elif "no coverage information" in low:
-        out["cv"] = 0.0
-
-    if re.search(r"^language\s*:", text, re.I | re.M):
-        out["l"] = 1.0
-    elif "language is missing" in low:
-        out["l"] = 0.0
-
-    if re.search(r"^source\s*:", text, re.I | re.M):
-        out["s"] = 1.0
-    elif "no source information" in low:
-        out["s"] = 0.0
-
-    if re.search(r"^date of creation\s*:\s*(20\d{2}-\d{2}-\d{2})", text, re.I | re.M):
-        out["dc"] = 1.0
-    elif "no creation date" in low or "creation date is missing" in low:
-        out["dc"] = 0.0
-
-    if re.search(r"^category\s*:", text, re.I | re.M):
-        out["c"] = 1.0
-    elif "no category" in low or "category is missing" in low:
-        out["c"] = 0.0
-
-    return out
 
 def _safe_format(template: str, values: Dict[str, Any]) -> str:
     class _SafeDict(dict):
@@ -281,102 +196,6 @@ def get_openai_runner(
             return f"EMPTY_OUTPUT | RESPONSE_REPR: {response!r}"
 
     return runner
-
-'''def get_openai_runner(
-    model_name: str,
-    api_key: Optional[str] = None,
-    max_retries: int = 1,
-) -> Callable[[str, int], str]:
-    from openai import OpenAI
-
-    resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
-    if not resolved_api_key:
-        raise ValueError("OpenAI API key is missing.")
-
-    client = OpenAI(api_key=resolved_api_key)
-
-    def _extract_text_from_response(response) -> str:
-        # 1) easiest path
-        text = getattr(response, "output_text", None)
-        if isinstance(text, str) and text.strip():
-            return text.strip()
-
-        # 2) inspect output items
-        try:
-            for item in getattr(response, "output", []) or []:
-                if getattr(item, "type", None) != "message":
-                    continue
-                for part in getattr(item, "content", []) or []:
-                    part_type = getattr(part, "type", None)
-                    if part_type in {"output_text", "text"}:
-                        txt = getattr(part, "text", None)
-                        if isinstance(txt, str) and txt.strip():
-                            return txt.strip()
-        except Exception:
-            pass
-
-        return ""
-
-    def runner(prompt: str, max_new_tokens: int = 128) -> str:
-        last_error: Optional[Exception] = None
-        compact_prompt = prompt.strip()
-
-        # GPT-5-family often burns output on reasoning unless we constrain it.
-        is_gpt5_family = str(model_name).lower().startswith("gpt-5")
-
-        for attempt in range(max_retries + 1):
-            try:
-                kwargs = {
-                    "model": model_name,
-                    "input": compact_prompt,
-                    "max_output_tokens": max_new_tokens,
-                }
-
-                if is_gpt5_family:
-                    kwargs["reasoning"] = {"effort": "minimal"}
-                    kwargs["text"] = {"verbosity": "low"}
-
-                response = client.responses.create(**kwargs)
-
-                text = _extract_text_from_response(response)
-                if text:
-                    return text
-
-                # if incomplete due to token budget, retry once with stricter prompt
-                try:
-                    status = getattr(response, "status", None)
-                    incomplete_details = getattr(response, "incomplete_details", None)
-                    reason = None
-                    if incomplete_details is not None:
-                        reason = getattr(incomplete_details, "reason", None)
-                        if reason is None and isinstance(incomplete_details, dict):
-                            reason = incomplete_details.get("reason")
-
-                    if status == "incomplete" and reason == "max_output_tokens" and attempt < max_retries:
-                        compact_prompt = (
-                            "Return ONLY a compact JSON object. "
-                            "No explanation, no markdown, no extra text.\n\n"
-                            + prompt.strip()
-                        )
-                        continue
-                except Exception:
-                    pass
-
-                try:
-                    return f"EMPTY_OUTPUT | FULL_RESPONSE: {response.model_dump_json(indent=2)}"
-                except Exception:
-                    return f"EMPTY_OUTPUT | RESPONSE_REPR: {response!r}"
-
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries:
-                    time.sleep(1.0)
-                    continue
-                return f"OPENAI_ERROR: {e}"
-
-        return f"OPENAI_ERROR: {last_error}"
-
-    return runner'''
 
 
 def get_llm_runner(
@@ -551,30 +370,30 @@ def infer_symbol(
 
     return value, raw, confidence, evidence
 
-def get_prompt_template_with_fallback(
+def get_prompt_template(
     prompts_cfg: Dict[str, Any],
     regime: str,
     prompt_name: str,
-    fallback_template: str,
 ) -> Tuple[str, str]:
-    """
-    Return (template, source), where source is:
-    - 'yaml:<regime>' if template was found from prompts.yaml
-    - 'fallback' otherwise
-    """
-    try:
-        tmpl = (
-            (prompts_cfg or {})
-            .get("prompt_regimes", {})
-            .get(regime, {})
-            .get(prompt_name, None)
-        )
-        if isinstance(tmpl, str) and tmpl.strip():
-            return tmpl, f"yaml:{regime}"
-    except Exception:
-        pass
+    prompt_regimes = (prompts_cfg or {}).get("prompt_regimes", {})
+    if not isinstance(prompt_regimes, dict):
+        raise ValueError("prompts.yaml is missing 'prompt_regimes' mapping.")
 
-    return fallback_template, "fallback"
+    regime_cfg = prompt_regimes.get(regime)
+    if not isinstance(regime_cfg, dict):
+        available = ", ".join(sorted(str(k) for k in prompt_regimes.keys()))
+        raise ValueError(
+            f"Prompt regime '{regime}' not found in prompts.yaml. "
+            f"Available regimes: {available}"
+        )
+
+    tmpl = regime_cfg.get(prompt_name)
+    if not isinstance(tmpl, str) or not tmpl.strip():
+        raise ValueError(
+            f"Prompt '{prompt_name}' is missing in prompts.yaml under regime '{regime}'."
+        )
+
+    return tmpl, f"yaml:{regime}"
 
 
 def _split_symbol_payload(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, Any]]:
@@ -604,37 +423,10 @@ def infer_manual_metadata_symbols(
     if not llm_runner or not text or not text.strip():
         return {}, "", "not_used", {"evidence": {}, "confidence": {}, "parsed": {}}
 
-    fallback_prompt = """
-Extract Vetrò metadata symbols from the text below.
-
-Return ONLY valid JSON.
-Allowed keys:
-pb, t, d, dc, cv, l, id, s, c, dp, sd, edp, ed, cd, lu, du
-
-Output structure:
-{
-  "<symbol>": <value>,
-  "__evidence__": {"<symbol>": "<short evidence string>"},
-  "__confidence__": {"<symbol>": <0..1>}
-}
-
-Rules:
-- Presence keys must be 0 or 1
-- Date keys must be in YYYY-MM-DD format
-- Natural-language update frequency counts as lu=1
-- du=1 only if update dates are explicitly given
-- If uncertain, omit the key
-- Return JSON only
-
-Text:
-{text}
-"""
-
-    prompt_template, prompt_source = get_prompt_template_with_fallback(
+    prompt_template, prompt_source = get_prompt_template(
         prompts_cfg=prompts_cfg or {},
         regime=prompt_regime,
         prompt_name="manual_metadata_extraction",
-        fallback_template=fallback_prompt,
     )
 
     prompt = prompt_template.format(text=text)
@@ -642,12 +434,17 @@ Text:
     try:
         raw = llm_runner(prompt, 96)
     except Exception as e:
-        return {}, f"LLM_ERROR: {e}", prompt_source, {"evidence": {}, "confidence": {}, "parsed": {}}
+        return {}, f"LLM_ERROR: {e}", prompt_source, {
+            "evidence": {},
+            "confidence": {},
+            "parsed": {},
+        }
 
     data = parse_llm_json_loose(raw)
     if not isinstance(data, dict) or not data:
         return {}, raw, prompt_source, {"evidence": {}, "confidence": {}, "parsed": {}}
-        symbol_data, evidence_map, confidence_map = _split_symbol_payload(data)
+
+    symbol_data, evidence_map, confidence_map = _split_symbol_payload(data)
 
     allowed_keys = {
         "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
@@ -676,6 +473,7 @@ Text:
         if k in cleaned:
             evid = evidence_map.get(k)
             conf = confidence_map.get(k)
+
             if evid is not None:
                 cleaned_evidence[k] = str(evid)
             if conf is not None:
@@ -686,4 +484,5 @@ Text:
         "evidence": cleaned_evidence,
         "confidence": cleaned_confidence,
     }
+
     return cleaned, raw, prompt_source, debug

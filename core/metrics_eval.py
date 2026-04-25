@@ -793,16 +793,6 @@ def compute_metrics(
                 missing_syms.append(sym)
 
         details["llm_debug"]["missing_syms"] = list(missing_syms)
-        #details["llm_debug"]["calls"].append(
-        #    {
-        #        "symbols": list(chunk),
-        #        "prompt": prompt,
-        #        "raw": raw,
-        #        "parsed": data,
-        #        "evidence": evidence_data,
-        #        "confidence": confidence_data,
-        #    }
-        #)
 
         # Only now build context
         if missing_syms:
