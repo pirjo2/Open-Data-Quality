@@ -439,20 +439,44 @@ def _to_json_safe(value: Any) -> Any:
 
 def _filter_prompt_metadata(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Keep only meaningful manual metadata values for prompt context.
-    Avoid flooding the LLM with explicit zero-values that may bias inference.
+    Keep only meaningful metadata values for prompt context.
+    Avoid crashing on list/dict values coming from Trino.
     """
     out: Dict[str, Any] = {}
+
     for k, v in (meta or {}).items():
         if v is None:
             continue
-        if isinstance(v, str) and not v.strip():
-            continue
-        if v in {0, 0.0, "0"}:
-            continue
-        out[k] = v
-    return out
 
+        if isinstance(v, str):
+            if not v.strip():
+                continue
+            if v.strip() in {"0", "0.0"}:
+                continue
+            out[k] = v
+            continue
+
+        if isinstance(v, (list, tuple)):
+            if len(v) == 0:
+                continue
+            out[k] = _to_json_safe(v)
+            continue
+
+        if isinstance(v, dict):
+            if len(v) == 0:
+                continue
+            out[k] = _to_json_safe(v)
+            continue
+
+        if isinstance(v, (int, float)):
+            if v == 0:
+                continue
+            out[k] = v
+            continue
+
+        out[k] = _to_json_safe(v)
+
+    return out
 
 ALLOW_PARTIAL_RESULT_METRICS = {
     "traceability.track_of_creation",

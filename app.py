@@ -963,7 +963,10 @@ if run_btn:
                 try:
                     meta_df = trino_query_to_df(conn, trino_meta_sql)
                     if not meta_df.empty:
-                        trino_metadata_raw = meta_df.iloc[0].to_dict()
+                        trino_metadata_raw = {
+                            str(k): make_json_safe(v)
+                            for k, v in meta_df.iloc[0].to_dict().items()
+                        }
                         trino_metadata = normalize_metadata_to_symbols(trino_metadata_raw)
                 except Exception as exc:
                     st.warning(f"Metadata query failed, continuing without it: {exc}")
