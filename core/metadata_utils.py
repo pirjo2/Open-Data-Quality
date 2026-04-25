@@ -1,28 +1,94 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+import json
 import re
+from typing import Any, Dict
+
 import pandas as pd
+import yaml
 
 
 def parse_kv_metadata(text: str) -> Dict[str, Any]:
     meta: Dict[str, Any] = {}
+
     for line in (text or "").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         if ":" not in line:
             continue
-        k, v = line.split(":", 1)
-        k = k.strip()
-        v = v.strip()
-        if not k:
+
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+
+        if not key:
             continue
+
         try:
-            meta[k] = float(v)
+            meta[key] = float(value)
         except Exception:
-            meta[k] = v
+            meta[key] = value
+
     return meta
+
+
+def dataframe_to_metadata_dict(df: pd.DataFrame) -> Dict[str, Any]:
+    if df is None or df.empty:
+        return {}
+
+    clean_df = df.copy()
+    clean_df.columns = [str(col).strip() for col in clean_df.columns]
+
+    key_aliases = {"key", "field", "name", "symbol", "parameter"}
+    value_aliases = {"value", "content", "data", "answer"}
+
+    key_col = None
+    value_col = None
+
+    for col in clean_df.columns:
+        col_l = col.lower()
+        if col_l in key_aliases and key_col is None:
+            key_col = col
+        if col_l in value_aliases and value_col is None:
+            value_col = col
+
+    if key_col and value_col:
+        out: Dict[str, Any] = {}
+        for _, row in clean_df[[key_col, value_col]].dropna(subset=[key_col]).iterrows():
+            k = str(row[key_col]).strip()
+            if not k:
+                continue
+            out[k] = row[value_col]
+        return out
+
+    if len(clean_df) == 1:
+        row = clean_df.iloc[0].dropna()
+        return {str(k).strip(): v for k, v in row.to_dict().items() if str(k).strip()}
+
+    return {}
+
+
+def parse_text_metadata_content(text: str) -> Dict[str, Any]:
+    clean_text = (text or "").strip()
+    if not clean_text:
+        return {}
+
+    try:
+        parsed = json.loads(clean_text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    try:
+        parsed = yaml.safe_load(clean_text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    return parse_kv_metadata(clean_text)
 
 
 def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
@@ -41,7 +107,7 @@ def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
 
     m = re.search(
         r"covers the period from\s+(20\d{2}-\d{2}-\d{2})\s+to\s+(20\d{2}-\d{2}-\d{2})",
-        low
+        low,
     )
     if m:
         out["sd"] = m.group(1)
@@ -69,20 +135,10 @@ def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
     elif "description is missing" in low:
         out["d"] = 0.0
 
-    if re.search(r"^identifier\s*:", text, re.I | re.M):
-        out["id"] = 1.0
-    elif "no identifier" in low or "identifier is missing" in low:
-        out["id"] = 0.0
-
     if re.search(r"^publisher\s*:", text, re.I | re.M):
         out["pb"] = 1.0
     elif "publisher is missing" in low:
         out["pb"] = 0.0
-
-    if re.search(r"^coverage\s*:", text, re.I | re.M):
-        out["cv"] = 1.0
-    elif "no coverage information" in low:
-        out["cv"] = 0.0
 
     if re.search(r"^language\s*:", text, re.I | re.M):
         out["l"] = 1.0
@@ -91,13 +147,13 @@ def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
 
     if re.search(r"^source\s*:", text, re.I | re.M):
         out["s"] = 1.0
-    elif "no source information" in low:
+    elif "source is missing" in low:
         out["s"] = 0.0
 
-    if re.search(r"^date of creation\s*:\s*(20\d{2}-\d{2}-\d{2})", text, re.I | re.M):
-        out["dc"] = 1.0
-    elif "no creation date" in low or "creation date is missing" in low:
-        out["dc"] = 0.0
+    if re.search(r"^coverage\s*:", text, re.I | re.M):
+        out["cv"] = 1.0
+    elif "coverage is missing" in low:
+        out["cv"] = 0.0
 
     if re.search(r"^category\s*:", text, re.I | re.M):
         out["c"] = 1.0
@@ -109,7 +165,6 @@ def extract_symbols_from_realistic_text(text: str) -> Dict[str, Any]:
 
 def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
-
     meta_l = {str(k).strip().lower(): v for k, v in (meta or {}).items()}
 
     key_aliases = {
@@ -126,10 +181,7 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
         "update_date": "modified",
     }
 
-    meta_l = {
-        key_aliases.get(k, k): v
-        for k, v in meta_l.items()
-    }
+    meta_l = {key_aliases.get(k, k): v for k, v in meta_l.items()}
 
     direct_symbols = {
         "pb",
@@ -154,26 +206,18 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
         if key in direct_symbols:
             out[key] = value
 
-    def _is_explicit_missing(x: Any) -> bool:
-        if x is None:
+    def _is_explicit_missing(value: Any) -> bool:
+        if value is None:
             return True
-        if isinstance(x, float) and pd.isna(x):
+        if isinstance(value, float) and pd.isna(value):
             return True
-        if isinstance(x, str):
-            return x.strip().lower() in {
-                "",
-                "none",
-                "null",
-                "missing",
-                "n/a",
-                "na",
-                "[]",
-                "not provided",
-                "not available",
-            }
+        if isinstance(value, str):
+            return value.strip().lower() in {"", "none", "null", "missing", "n/a", "na", "[]"}
+        if isinstance(value, (list, tuple, set, dict)):
+            return len(value) == 0
         return False
 
-    def _presence_from_key(meta_dict: Dict[str, Any], *keys: str):
+    def _presence_from_key(meta_dict: Dict[str, Any], *keys: str) -> Any:
         for key in keys:
             if key in meta_dict:
                 return 0.0 if _is_explicit_missing(meta_dict[key]) else 1.0
@@ -211,12 +255,24 @@ def normalize_metadata_to_symbols(meta: Dict[str, Any]) -> Dict[str, Any]:
 
     for field in ["sd", "edp", "ed", "cd"]:
         if field not in out and field in meta_l:
-            out[field] = str(meta_l[field])
+            value = meta_l[field]
+            if value is not None and str(value).strip():
+                out[field] = str(value)
 
-    if "lu" not in out and "updates" in meta_l:
-        out["lu"] = 0.0 if _is_explicit_missing(meta_l["updates"]) else 1.0
+    if "lu" not in out:
+        value = _presence_from_key(meta_l, "update_history", "updates", "modifications")
+        if value is not None:
+            out["lu"] = value
 
-    if "du" not in out and "updates" in meta_l:
-        out["du"] = 0.0 if _is_explicit_missing(meta_l["updates"]) else None
+    if "du" not in out:
+        value = _presence_from_key(
+            meta_l,
+            "update_dates",
+            "modified",
+            "metadata_modified",
+            "modificationdate",
+        )
+        if value is not None:
+            out["du"] = value
 
-    return {k: v for k, v in out.items() if v is not None}
+    return out

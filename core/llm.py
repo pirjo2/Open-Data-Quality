@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Any, Dict, Optional, Tuple, Callable
-from core.metadata_utils import extract_symbols_from_realistic_text
 import json
 import os
 import re

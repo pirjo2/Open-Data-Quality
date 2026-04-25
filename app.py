@@ -13,7 +13,13 @@ import streamlit as st
 import yaml
 
 from core.llm import get_llm_runner, infer_manual_metadata_symbols
-from core.metadata_utils import parse_kv_metadata, normalize_metadata_to_symbols
+from core.metadata_utils import (
+    dataframe_to_metadata_dict,
+    extract_symbols_from_realistic_text,
+    normalize_metadata_to_symbols,
+    parse_kv_metadata,
+    parse_text_metadata_content,
+)
 from core.pipeline import run_quality_assessment
 from core.utils import make_arrow_safe
 
@@ -200,77 +206,6 @@ def capitalise_dimension(value: str) -> str:
         "accuracy": "Accuracy",
     }
     return mapping.get(str(value).strip().lower(), str(value).replace("_", " ").title())
-
-
-def dataframe_to_metadata_dict(df: pd.DataFrame) -> Dict[str, Any]:
-    if df is None or df.empty:
-        return {}
-
-    clean_df = df.dropna(how="all").copy()
-    if clean_df.empty:
-        return {}
-
-    clean_df.columns = [str(col).strip() for col in clean_df.columns]
-    lower_cols = [col.lower() for col in clean_df.columns]
-
-    key_aliases = {"key", "field", "name", "symbol", "parameter"}
-    value_aliases = {"value", "content", "data", "answer"}
-
-    key_col = None
-    value_col = None
-    for col in clean_df.columns:
-        if col.lower() in key_aliases and key_col is None:
-            key_col = col
-        if col.lower() in value_aliases and value_col is None:
-            value_col = col
-
-    if key_col and value_col:
-        out: Dict[str, Any] = {}
-        for _, row in clean_df[[key_col, value_col]].dropna(how="all").iterrows():
-            key = str(row.get(key_col, "")).strip()
-            value = row.get(value_col)
-            if key:
-                out[key] = value
-        return out
-
-    if len(clean_df.columns) == 2:
-        first_col, second_col = clean_df.columns[:2]
-        out = {}
-        for _, row in clean_df[[first_col, second_col]].dropna(how="all").iterrows():
-            key = str(row.get(first_col, "")).strip()
-            value = row.get(second_col)
-            if key:
-                out[key] = value
-        if out:
-            return out
-
-    if len(clean_df) == 1:
-        row = clean_df.iloc[0].dropna()
-        return {str(k).strip(): v for k, v in row.to_dict().items() if str(k).strip()}
-
-    return {}
-
-
-def parse_text_metadata_content(text: str) -> Dict[str, Any]:
-    clean_text = (text or "").strip()
-    if not clean_text:
-        return {}
-
-    try:
-        parsed = json.loads(clean_text)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        pass
-
-    try:
-        parsed = yaml.safe_load(clean_text)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        pass
-
-    return parse_kv_metadata(clean_text)
 
 
 def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
