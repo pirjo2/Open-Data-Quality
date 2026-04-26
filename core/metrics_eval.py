@@ -276,7 +276,7 @@ Sample rows:
         print(prompt)
         print("\n--- CURENTNESS PROMPT END ---\n")
 
-    raw = llm_runner(prompt, 96)
+    raw = llm_runner(prompt, 384)
 
     try:
         data = json.loads(raw)
@@ -298,6 +298,21 @@ Sample rows:
 def _chunk_list(items, chunk_size):
     for i in range(0, len(items), chunk_size):
         yield items[i:i + chunk_size]
+
+COUNT_SYMBOLS = {
+    "ncr", "ns", "nsc", "ncm", "ncuf", "nce"
+}
+
+COUNT_SYMBOL_MAX = {
+    "ncr": "nr",
+    "ns": "nc",
+    "nsc": "ns",
+    "ncm": "nc",
+    "ncuf": "nc",
+    "nce": "ncl",
+}
+
+
 
 def _get_numeric_series_map(
     df: pd.DataFrame,
@@ -901,7 +916,7 @@ Dataset context:
                     print(prompt)
                     print("\n--- SEMANTIC PROMPT END ---\n")
 
-                raw = llm_runner(prompt, 160)
+                raw = llm_runner(prompt, 384)
 
                 details["llm_debug"]["calls"].append(
                     {
@@ -913,6 +928,9 @@ Dataset context:
                 data = parse_llm_json_loose(raw)
                 if not isinstance(data, dict):
                     data = {}
+
+                top_level_values = _extract_top_level_llm_values(raw, list(chunk))
+                data.update(top_level_values)
 
                 evidence_data = data.get("__evidence__", {}) if isinstance(data.get("__evidence__"), dict) else {}
                 confidence_data = data.get("__confidence__", {}) if isinstance(data.get("__confidence__"), dict) else {}
@@ -938,6 +956,66 @@ Dataset context:
                 "sc", "oav", "dav", "e",
             }
 
+            count_symbols = {
+                "ncr", "ns", "nsc", "ncm", "ncuf", "nce"
+            }
+
+
+            def _parse_llm_numeric_symbol(sym: str, raw_val: Any) -> Optional[float]:
+
+                if raw_val is None:
+                    return None
+
+                if isinstance(raw_val, bool):
+                    val = float(int(raw_val))
+
+                elif isinstance(raw_val, (int, float)):
+                    val = float(raw_val)
+
+                elif isinstance(raw_val, str):
+                    text = raw_val.strip()
+
+                    if not re.fullmatch(r"[-+]?\d+(\.\d+)?", text):
+                        return None
+
+                    val = float(text)
+
+                else:
+                    return None
+
+                count_symbols = {
+                    "ncr", "ns", "nsc", "ncm", "ncuf", "nce"
+                }
+
+                if sym in count_symbols and val < 0:
+                    return None
+
+                return val
+
+            def _extract_top_level_llm_values(raw_text: str, requested_symbols: list[str]) -> Dict[str, Any]:
+
+                if not raw_text:
+                    return {}
+
+                head = re.split(
+                    r'["\']?__(?:evidence|confidence)__["\']?\s*:',
+                    raw_text,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0]
+
+                out: Dict[str, Any] = {}
+
+                for sym in requested_symbols:
+                    pattern = rf'(?m)^\s*["\']?{re.escape(sym)}["\']?\s*:\s*([-+]?\d+(?:\.\d+)?)\s*,?\s*$'
+                    m = re.search(pattern, head)
+
+                    if m:
+                        out[sym] = float(m.group(1))
+
+                return out
+
+
             for sym in missing_syms:
                 val = all_data.get(sym)
 
@@ -948,13 +1026,7 @@ Dataset context:
                         val = None
 
                 elif sym in numeric_symbols:
-                    if isinstance(val, (int, float)):
-                        val = float(val)
-                    elif isinstance(val, str):
-                        m = re.search(r"[-+]?\d*\.?\d+", val)
-                        val = float(m.group(0)) if m else None
-                    else:
-                        val = None
+                    val = _parse_llm_numeric_symbol(sym, val)
 
                 elif sym in date_symbols:
                     if isinstance(val, str):
