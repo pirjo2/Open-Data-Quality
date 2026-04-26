@@ -1,5 +1,5 @@
-customer_id,order_date,total_amount
-1,2026-02-01,1
-2,2026-02-02,10
-3,2026-02-03,3
-4,2026-02-04,7
+person_id,administrative_unit_code,transaction_date,local_amount,classification_code
+1001,EE001,2026-02-01,15.5,A
+1002,EE002,2026-02-02,20.0,B
+1003,EE003,2026-02-03,12.3,A
+1004,EE004,2026-02-04,18.9,C

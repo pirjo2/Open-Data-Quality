@@ -1,2 +1,1 @@
-The dataset documentation does not describe how often the dataset is updated.
-No previous update dates are provided.
+This dataset is shared as a one-time extract. No update log is included, and update dates have not been recorded in the metadata.

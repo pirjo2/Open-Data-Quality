@@ -1,2 +1,1 @@
-For each row, reported_total must equal the sum of part_a, part_b and part_c.
-Use part_a + part_b + part_c as the observed aggregate value.
+The file includes a reported total, but the reported aggregate is lower than the sum of the detailed rows. Values are given in whole units.

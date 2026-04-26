@@ -1,3 +1,1 @@
-Rules:
-- age_years must be numeric and between 0 and 120
-- temperature_c must be numeric and between -50 and 60
+The values were validated before export, and no malformed cell values are expected in this file.

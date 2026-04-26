@@ -1,7 +1,1 @@
-on_web: true
-open_license: true
-machine_readable: true
-non_proprietary_format: true
-uses_uris: true
-linked_open_data: true
-expected_star_level: 5
+The dataset is openly available on the web as CSV through a stable landing page. It uses URI-based identifiers and includes links to related reference resources.

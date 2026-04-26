@@ -1,2 +1,1 @@
-source:
-date_of_creation:
+This file contains a small exported table. The original source is not listed, and the creation date has not been recorded in the accompanying note.

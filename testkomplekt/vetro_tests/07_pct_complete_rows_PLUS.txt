@@ -1,0 +1,1 @@
+Almost every row is complete. Only a small number of rows still contain a missing value.

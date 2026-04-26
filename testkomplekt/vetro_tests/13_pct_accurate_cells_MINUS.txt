@@ -1,3 +1,1 @@
-Rules:
-- age_years must be numeric and between 0 and 120
-- temperature_c must be numeric and between -50 and 60
+Some entries still contain malformed values, and the file has not yet been fully cleaned or validated.

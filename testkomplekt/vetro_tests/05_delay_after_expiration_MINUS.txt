@@ -1,3 +1,1 @@
-The previous version expired on 2026-03-01.
-The updated dataset became available on 2026-06-15.
-The dataset covers the period from 2026-02-01 to 2026-02-28.
+This dataset covers the period from 2024-01-01 to 2024-01-27. It expired on 2024-01-27 and became available again on 2024-02-23.

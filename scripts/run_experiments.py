@@ -33,15 +33,18 @@ import yaml
 
 # Muuda siin oma jooksuvalikud
 MODEL_SPECS = [
-    #{"provider": "openai", "model": "gpt-4.1-mini"},
-    #{"provider": "openai", "model": "gpt-5-mini"},
-    {"provider": "openai", "model": "gpt-5.1-mini"},
-    #{"provider": "huggingface", "model": "google/flan-t5-base"},
+    {"provider": "openai", "model": "gpt-4.1"},
+    {"provider": "openai", "model": "gpt-4.1-mini"},
+    {"provider": "openai", "model": "gpt-5-mini"},
+    {"provider": "openai", "model": "gpt-5"},
+    {"provider": "huggingface", "model": "google/flan-t5-small"},
+    {"provider": "huggingface", "model": "google/flan-t5-base"},
+    {"provider": "huggingface", "model": "google/flan-t5-large"},
 ]
 
 PROMPT_REGIMES = [
-    #"zero_shot",
-    #"few_shot",
+    "zero_shot",
+    "few_shot",
     "reasoning",
 ]
 
@@ -325,6 +328,11 @@ def main() -> None:
 
     summary_df = pd.DataFrame(summary_rows)
     metrics_long_df = pd.DataFrame(metric_rows)
+
+    if metrics_long_df.empty:
+        raise RuntimeError(
+            "metrics_long_df is empty. No metric rows were collected."
+        )
 
     target_metric_map = {
         "01": "traceability.track_of_creation",

@@ -1,5 +1,1 @@
-Columns:
-- id: unique row identifier
-- amount_eur: monetary amount in euros
-- date_iso: transaction date in ISO format YYYY-MM-DD
-- country_code: country code in ISO 3166-1 alpha-2 format
+Each of the four columns includes a short description in the accompanying metadata.

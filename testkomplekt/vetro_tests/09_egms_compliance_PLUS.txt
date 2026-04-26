@@ -1,9 +1,1 @@
-Title: Population by county in 2024
-Description: Official statistics on resident population by Estonian county.
-Publisher: Statistics Estonia
-Source: Population Register
-Date of creation: 2025-01-15
-Coverage: Estonia, 2024
-Language: English
-Identifier: population-county-2024
-Category: Demography
+Population figures by municipality, 2024. Category: Demography. Description: Annual population totals by municipality. Created on 2024-01-15. Coverage: Estonia. Language: Estonian. Identifier: POP-2024-MUNI-001. Source: Population Register. Publisher: Statistics Estonia.

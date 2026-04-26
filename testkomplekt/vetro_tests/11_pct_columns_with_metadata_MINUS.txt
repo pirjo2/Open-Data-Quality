@@ -1,2 +1,1 @@
-Columns:
-- id: row identifier
+Only one of the four columns currently has a written description. The remaining three columns do not yet have metadata notes.

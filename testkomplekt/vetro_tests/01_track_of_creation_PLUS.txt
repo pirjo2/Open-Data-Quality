@@ -1,2 +1,1 @@
-source: Statistics Estonia API
-date_of_creation: 2026-01-10
+This dataset is an extract from the Population Register. It was created on 2024-01-15, and the source system is listed in the accompanying metadata.

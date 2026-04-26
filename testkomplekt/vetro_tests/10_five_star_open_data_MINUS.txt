@@ -1,7 +1,1 @@
-on_web: false
-open_license: false
-machine_readable: false
-non_proprietary_format: false
-uses_uris: false
-linked_open_data: false
-expected_star_level: 0
+The file is shared only as a basic attachment. No web publication note, open format statement, URI scheme, or linked data information has been added.

@@ -1,0 +1,1 @@
+All column names are written in plain language and can be understood without additional documentation.
