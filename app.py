@@ -216,14 +216,16 @@ def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
     suffix = Path(uploaded.name).suffix.lower()
 
     if suffix in {".csv", ".tsv", ".txt"}:
-        text_content = raw_bytes.decode("utf-8", errors="ignore")
+        text_content = decode_text_with_encoding_fallback(raw_bytes)
+
         if suffix in {".csv", ".tsv"}:
             try:
-                df = pd.read_csv(io.BytesIO(raw_bytes), sep=None, engine="python")
+                df = read_csv_with_encoding_fallback(raw_bytes)
                 parsed = dataframe_to_metadata_dict(df)
                 return parsed, text_content
             except Exception:
                 return parse_text_metadata_content(text_content), text_content
+
         return parse_text_metadata_content(text_content), text_content
 
     if suffix == ".xls":
@@ -237,7 +239,7 @@ def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
         return dataframe_to_metadata_dict(df), text_content
 
     if suffix == ".json":
-        text_content = raw_bytes.decode("utf-8", errors="ignore")
+        text_content = decode_text_with_encoding_fallback(raw_bytes)
         try:
             parsed = json.loads(text_content)
             if isinstance(parsed, dict):
@@ -250,7 +252,7 @@ def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
         return {}, text_content
 
     if suffix in {".yaml", ".yml"}:
-        text_content = raw_bytes.decode("utf-8", errors="ignore")
+        text_content = decode_text_with_encoding_fallback(raw_bytes)
         try:
             parsed = yaml.safe_load(text_content) or {}
             if isinstance(parsed, dict):
@@ -262,19 +264,68 @@ def parse_uploaded_metadata_file(uploaded) -> Tuple[Dict[str, Any], str]:
             pass
         return {}, text_content
 
-    return {}, raw_bytes.decode("utf-8", errors="ignore")
+    return {}, decode_text_with_encoding_fallback(raw_bytes)
 
 
 def parse_manual_metadata_text(text: str) -> Dict[str, Any]:
     return parse_text_metadata_content(text)
 
+def read_csv_with_encoding_fallback(raw_bytes: bytes) -> pd.DataFrame:
+    encodings = [
+        "utf-8",
+        "utf-8-sig",
+        "cp1257",        # Baltic / Estonian Windows encoding
+        "iso-8859-13",   # Baltic ISO encoding
+        "latin1",
+        "cp1252",
+    ]
+
+    last_error = None
+
+    for encoding in encodings:
+        try:
+            return pd.read_csv(
+                io.BytesIO(raw_bytes),
+                sep=None,
+                engine="python",
+                encoding=encoding,
+            )
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+
+    text = raw_bytes.decode("utf-8", errors="replace")
+    return pd.read_csv(
+        io.StringIO(text),
+        sep=None,
+        engine="python",
+    )
+
+def decode_text_with_encoding_fallback(raw_bytes: bytes) -> str:
+    encodings = [
+        "utf-8",
+        "utf-8-sig",
+        "cp1257",        # Baltic / Estonian Windows encoding
+        "iso-8859-13",   # Baltic ISO encoding
+        "latin1",
+        "cp1252",
+    ]
+
+    for encoding in encodings:
+        try:
+            return raw_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    return raw_bytes.decode("utf-8", errors="replace")
 
 def parse_uploaded_dataset_file(uploaded_file) -> Tuple[pd.DataFrame, str]:
     name = uploaded_file.name
     ext = Path(name).suffix.lower()
+    raw_bytes = uploaded_file.getvalue()
 
     if ext in {".csv", ".tsv", ".txt"}:
-        return pd.read_csv(uploaded_file, sep=None, engine="python"), ext
+        return read_csv_with_encoding_fallback(raw_bytes), ext
 
     if ext in {".xls", ".xlsx"}:
         return pd.read_excel(uploaded_file), ext
