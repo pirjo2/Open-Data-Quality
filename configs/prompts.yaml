@@ -196,7 +196,8 @@ prompt_regimes:
       - Return ONLY valid JSON.
       - Use only the requested symbols as keys.
       - Binary/presence symbols must be 0 or 1 only.
-      - Count / numeric symbols may be integers or floats if clearly inferable.
+      - For count symbols, count the exact unit described by the symbol meaning or formula input, for example cells, rows, columns, or values.
+      - Distinguish missing values from invalid values: NULL/empty/N/A is usually a completeness issue unless it is clearly malformed for the field.
       - Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
       - If evidence is insufficient, omit the symbol.
       - Do not invent facts.
@@ -307,7 +308,8 @@ prompt_regimes:
       Rules:
       - Use only the requested symbols as keys.
       - Binary/presence symbols must be 0 or 1 only.
-      - Count / numeric symbols may be integers or floats if clearly inferable.
+      - For count symbols, count the exact unit described by the symbol meaning or formula input, for example cells, rows, columns, or values.
+      - Distinguish missing values from invalid values: NULL/empty/N/A is usually a completeness issue unless it is clearly malformed for the field.
       - Date symbols must be YYYY-MM-DD only.
       - If uncertain, omit the symbol.
       - No explanation, no markdown.
@@ -400,7 +402,8 @@ prompt_regimes:
       - Return ONLY valid JSON.
       - Use only the requested symbols as keys.
       - Binary/presence symbols must be 0 or 1 only.
-      - Count / numeric symbols may be integers or floats if clearly inferable.
+      - For count symbols, count the exact unit described by the symbol meaning or formula input, for example cells, rows, columns, or values.
+      - Distinguish missing values from invalid values: NULL/empty/N/A is usually a completeness issue unless it is clearly malformed for the field.
       - Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
       - If evidence is insufficient, omit the symbol.
       - No explanation, no markdown.
