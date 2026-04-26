@@ -326,7 +326,6 @@ def _extract_top_level_llm_values(raw_text: str, requested_symbols: list[str]) -
 
     return out
 
-
 def _get_numeric_series_map(
     df: pd.DataFrame,
     min_valid_ratio: float = 0.95,
@@ -788,11 +787,6 @@ def compute_metrics(
     # --------- LLM fallback (missing + auto=None refinement) ----------
     if use_llm and llm_runner is not None:
 
-        '''refinable_symbols = {
-            "pb", "t", "d", "dc", "cv", "l", "id", "s", "c",
-            "dp", "sd", "edp", "ed", "cd",
-            "lu", "du"
-        }'''
         refinable_symbols = set(required_symbols)
 
         missing_syms = []
@@ -868,33 +862,6 @@ def compute_metrics(
             chunk_evidence_map = {}
             chunk_confidence_map = {}
 
-            fallback_prompt = """
-You are evaluating metadata and table semantics for an open dataset.
-
-Infer the requested Vetrò symbols from:
-- raw metadata text
-- portal metadata JSON
-- column names
-- data types
-- sample values
-- sample rows
-
-Rules:
-- Return ONLY valid JSON.
-- Use only the requested symbols as keys.
-- Binary/presence symbols must be 0 or 1 only.
-- Count / numeric symbols may be integers or floats if clearly inferable.
-- Date symbols (dp, sd, edp, ed, cd) must be YYYY-MM-DD only if clearly supported.
-- If evidence is insufficient, omit the symbol.
-- Do not invent facts.
-
-Requested symbols:
-{requested_symbols}
-
-Dataset context:
-{context}
-"""
-
             prompt_template, prompt_source = get_prompt_template(
                 prompts_cfg,
                 prompt_regime,
@@ -968,66 +935,6 @@ Dataset context:
                 "ncr", "ns", "nsc", "ncm", "ncuf", "nce",
                 "sc", "oav", "dav", "e",
             }
-
-            count_symbols = {
-                "ncr", "ns", "nsc", "ncm", "ncuf", "nce"
-            }
-
-
-            def _parse_llm_numeric_symbol(sym: str, raw_val: Any) -> Optional[float]:
-
-                if raw_val is None:
-                    return None
-
-                if isinstance(raw_val, bool):
-                    val = float(int(raw_val))
-
-                elif isinstance(raw_val, (int, float)):
-                    val = float(raw_val)
-
-                elif isinstance(raw_val, str):
-                    text = raw_val.strip()
-
-                    if not re.fullmatch(r"[-+]?\d+(\.\d+)?", text):
-                        return None
-
-                    val = float(text)
-
-                else:
-                    return None
-
-                count_symbols = {
-                    "ncr", "ns", "nsc", "ncm", "ncuf", "nce"
-                }
-
-                if sym in count_symbols and val < 0:
-                    return None
-
-                return val
-
-            def _extract_top_level_llm_values(raw_text: str, requested_symbols: list[str]) -> Dict[str, Any]:
-
-                if not raw_text:
-                    return {}
-
-                head = re.split(
-                    r'["\']?__(?:evidence|confidence)__["\']?\s*:',
-                    raw_text,
-                    maxsplit=1,
-                    flags=re.IGNORECASE,
-                )[0]
-
-                out: Dict[str, Any] = {}
-
-                for sym in requested_symbols:
-                    pattern = rf'(?m)^\s*["\']?{re.escape(sym)}["\']?\s*:\s*([-+]?\d+(?:\.\d+)?)\s*,?\s*$'
-                    m = re.search(pattern, head)
-
-                    if m:
-                        out[sym] = float(m.group(1))
-
-                return out
-
 
             for sym in missing_syms:
                 val = all_data.get(sym)
