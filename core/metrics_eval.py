@@ -7,7 +7,7 @@ import re
 import json
 
 import pandas as pd
-from core.llm import get_prompt_template_with_fallback, parse_llm_json_loose
+from core.llm import get_prompt_template, parse_llm_json_loose
 
 DEBUG_PRINT_PROMPTS = False
 
@@ -236,30 +236,6 @@ def _infer_currentness_anchor(
 
     sample_rows = df.head(5).to_dict(orient="records")
 
-    fallback_prompt = """
-Return ONLY valid JSON with these keys:
-- current_column
-- current_value
-
-Task:
-Infer which dataset column is used to evaluate whether a row is current,
-and what value represents the current reference period.
-
-Rules:
-- Use only a column that actually exists in the dataset
-- current_value must match the dataset format if possible
-- If uncertain, return {{}}
-
-Metadata text:
-{manual_metadata_text}
-
-Columns:
-{columns}
-
-Sample rows:
-{sample_rows}
-"""
-
     prompt_template, prompt_source = get_prompt_template(
         prompts_cfg,
         prompt_regime,
@@ -281,9 +257,6 @@ Sample rows:
     data = parse_llm_json_loose(raw)
     if not isinstance(data, dict):
         data = {}
-
-    top_level_values = _extract_top_level_llm_values(raw, list(chunk))
-    data.update(top_level_values)
 
     col = data.get("current_column")
     val = data.get("current_value")
