@@ -260,8 +260,11 @@ Sample rows:
 {sample_rows}
 """
 
-    prompt_template = get_prompt_template(prompt_defs, prompt_regime, prompt_key)
-    prompt_source = f"yaml:{prompt_regime}"
+    prompt_template, prompt_source = get_prompt_template(
+        prompts_cfg,
+        prompt_regime,
+        "currentness_anchor",
+    )
 
     prompt = prompt_template.format(
         manual_metadata_text=manual_metadata_text,
@@ -832,14 +835,6 @@ def compute_metrics(
             sample_rows = _to_json_safe(df.head(5).to_dict(orient="records"))
             context_lines.append(json.dumps(sample_rows, indent=2, default=str))
 
-            #context_lines.append("")
-            #context_lines.append("Requested symbol meanings:")
-            #for sym in missing_syms:
-            #    if sym in SYMBOL_HINTS:
-            #        context_lines.append(f"- {sym}: {SYMBOL_HINTS[sym]}")
-
-            #context = "\n".join(context_lines)
-
             all_data: Dict[str, Any] = {}
             chunk_raw_map: Dict[str, str] = {}
             chunk_evidence_map = {}
@@ -872,8 +867,11 @@ Dataset context:
 {context}
 """
 
-            prompt_template = get_prompt_template(prompt_defs, prompt_regime, prompt_key)
-            prompt_source = f"yaml:{prompt_regime}"
+            prompt_template, prompt_source = get_prompt_template(
+                prompts_cfg,
+                prompt_regime,
+                "semantic_metric_inference",
+            )
 
             details["prompt_sources"]["semantic_metric_inference"] = prompt_source
 
