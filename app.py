@@ -1087,7 +1087,7 @@ if run_btn:
                 else:
                     st.info("No metrics with numeric values are available for the chart.")
 
-                st.dataframe(
+                metrics_display_df = (
                     metrics_table[
                         [
                             "dimension_display",
@@ -1103,7 +1103,11 @@ if run_btn:
                         "value_display": "value",
                         "missing_inputs": "missing_required_inputs",
                     })
-                    .sort_values(["dimension", "metric_id"]),
+                    .sort_values(["dimension", "metric_id"])
+                )
+
+                st.dataframe(
+                    make_arrow_safe(metrics_display_df),
                     width="stretch",
                 )
 
@@ -1147,7 +1151,7 @@ if run_btn:
                 })
 
             symbol_df = pd.DataFrame(symbol_rows)
-            st.dataframe(symbol_df, width="stretch")
+            st.dataframe(make_arrow_safe(symbol_df), width="stretch")
 
             st.markdown("### Symbol trace")
             st.json(details.get("symbol_trace", {}))
@@ -1183,7 +1187,7 @@ if run_btn:
             st.markdown("**Auto-derived inputs / inferred symbols**")
             st.json(details.get("raw_inputs", {}))
             st.markdown("**Metric evaluation details**")
-            st.dataframe(metrics_df, width="stretch")
+            st.dataframe(make_arrow_safe(metrics_df), width="stretch")
             st.markdown("**Prompt regime used**")
             st.write(prompt_regime)
             st.markdown("**LLM calls**")
