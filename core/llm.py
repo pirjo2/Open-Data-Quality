@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, Dict, Optional, Tuple, Callable
+from typing import Any, Dict, List, Optional, Tuple, Callable
 import json
 import os
 import re
@@ -17,7 +17,127 @@ NUM_RE = re.compile(r"[-+]?\d*\.?\d+")
 YES_RE = re.compile(r"\b(yes|true|present|exists|available)\b", re.IGNORECASE)
 NO_RE = re.compile(r"\b(no|false|missing|absent|not available)\b", re.IGNORECASE)
 DEBUG_PRINT_PROMPTS = False
+COUNT_SYMBOLS = {
+    "nc", "nce", "ncl", "ncm", "ncr", "ncuf",
+    "nir", "nr", "nsc", "ns", "ic"
+}
 
+
+def _to_number(value: Any) -> Optional[float]:
+    """
+    Converts direct numeric LLM values safely.
+    Does not extract numbers from long evidence strings.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return float(int(value))
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, str):
+        value = value.strip()
+
+        if value.lower() in {"null", "none", "unknown", "n/a", ""}:
+            return None
+
+        if re.fullmatch(r"-?\d+(\.\d+)?", value):
+            return float(value)
+
+    return None
+
+
+def parse_llm_symbol_response(
+    raw_text: str,
+    expected_symbols: List[str],
+) -> Tuple[Dict[str, float], Dict[str, str], Dict[str, float]]:
+    """
+    Parses LLM symbol values, evidence and confidence safely.
+
+    Important:
+    - Direct JSON values are preferred.
+    - Evidence text is never used as a source for numeric symbol values.
+    - Regex fallback only reads direct top-level lines like: "nce": 6
+    """
+
+    values: Dict[str, float] = {}
+    evidence: Dict[str, str] = {}
+    confidence: Dict[str, float] = {}
+
+    expected = set(expected_symbols)
+
+    # 1. Try normal JSON first
+    data = None
+    try:
+        data = json.loads(raw_text)
+    except Exception:
+        data = None
+
+    if isinstance(data, dict):
+        for symbol in expected_symbols:
+            if symbol not in data:
+                continue
+
+            number = _to_number(data.get(symbol))
+
+            if number is None:
+                continue
+
+            # Count symbols cannot be negative.
+            if symbol in COUNT_SYMBOLS and number < 0:
+                continue
+
+            values[symbol] = number
+
+        raw_evidence = data.get("__evidence__", {})
+        if isinstance(raw_evidence, dict):
+            for symbol in expected_symbols:
+                if symbol in raw_evidence and raw_evidence[symbol] is not None:
+                    evidence[symbol] = str(raw_evidence[symbol])
+
+        raw_confidence = data.get("__confidence__", {})
+        if isinstance(raw_confidence, dict):
+            for symbol in expected_symbols:
+                number = _to_number(raw_confidence.get(symbol))
+                if number is not None:
+                    confidence[symbol] = number
+
+        return values, evidence, confidence
+
+    value_part = re.split(
+        r'["\']?__(?:evidence|confidence)__["\']?\s*:',
+        raw_text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    for line in value_part.splitlines():
+        match = re.match(
+            r'^\s*["\']?([a-zA-Z_][a-zA-Z0-9_]*)["\']?\s*:\s*(-?\d+(?:\.\d+)?)\s*,?\s*$',
+            line.strip(),
+        )
+
+        if not match:
+            continue
+
+        symbol, raw_value = match.groups()
+
+        if symbol not in expected:
+            continue
+
+        number = _to_number(raw_value)
+
+        if number is None:
+            continue
+
+        if symbol in COUNT_SYMBOLS and number < 0:
+            continue
+
+        values[symbol] = number
+
+    return values, evidence, confidence
 
 def parse_llm_json_loose(raw_text: str) -> Dict[str, Any]:
     """
@@ -34,7 +154,10 @@ def parse_llm_json_loose(raw_text: str) -> Dict[str, Any]:
 
     # First: normal JSON
     try:
-        data = json.loads(raw_text)
+        data = values, evidence, confidence = parse_llm_symbol_response(
+            raw_text=raw_text,
+            expected_symbols=symbols_to_infer,
+        )
         return data if isinstance(data, dict) else {}
     except Exception:
         pass

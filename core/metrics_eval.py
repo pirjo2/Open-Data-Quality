@@ -7,7 +7,7 @@ import re
 import json
 
 import pandas as pd
-from core.llm import get_prompt_template, parse_llm_json_loose
+from core.llm import get_prompt_template_with_fallback, parse_llm_json_loose
 
 DEBUG_PRINT_PROMPTS = False
 
@@ -278,12 +278,12 @@ Sample rows:
 
     raw = llm_runner(prompt, 384)
 
-    try:
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return None, None, prompt_source
-    except Exception:
-        return None, None, prompt_source
+    data = parse_llm_json_loose(raw)
+    if not isinstance(data, dict):
+        data = {}
+
+    top_level_values = _extract_top_level_llm_values(raw, list(chunk))
+    data.update(top_level_values)
 
     col = data.get("current_column")
     val = data.get("current_value")
@@ -303,15 +303,55 @@ COUNT_SYMBOLS = {
     "ncr", "ns", "nsc", "ncm", "ncuf", "nce"
 }
 
-COUNT_SYMBOL_MAX = {
-    "ncr": "nr",
-    "ns": "nc",
-    "nsc": "ns",
-    "ncm": "nc",
-    "ncuf": "nc",
-    "nce": "ncl",
-}
 
+def _parse_llm_numeric_symbol(sym: str, raw_val: Any) -> Optional[float]:
+    if raw_val is None:
+        return None
+
+    if isinstance(raw_val, bool):
+        val = float(int(raw_val))
+
+    elif isinstance(raw_val, (int, float)):
+        val = float(raw_val)
+
+    elif isinstance(raw_val, str):
+        text = raw_val.strip()
+
+        if not re.fullmatch(r"[-+]?\d+(\.\d+)?", text):
+            return None
+
+        val = float(text)
+
+    else:
+        return None
+
+    if sym in COUNT_SYMBOLS and val < 0:
+        return None
+
+    return val
+
+
+def _extract_top_level_llm_values(raw_text: str, requested_symbols: list[str]) -> Dict[str, Any]:
+    if not raw_text:
+        return {}
+
+    head = re.split(
+        r'["\']?__(?:evidence|confidence)__["\']?\s*:',
+        raw_text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+
+    out: Dict[str, Any] = {}
+
+    for sym in requested_symbols:
+        pattern = rf'(?m)^\s*["\']?{re.escape(sym)}["\']?\s*:\s*([-+]?\d+(?:\.\d+)?)\s*,?\s*$'
+        m = re.search(pattern, head)
+
+        if m:
+            out[sym] = float(m.group(1))
+
+    return out
 
 
 def _get_numeric_series_map(
