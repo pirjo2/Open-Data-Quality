@@ -344,30 +344,11 @@ def _get_numeric_series_map(
 
 
 def _infer_aggregation_symbols_from_table(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    Language-independent aggregation inference.
-
-    Idea:
-    - find numeric columns
-    - try each numeric column as declared aggregate (dav)
-    - try subsets of the other numeric columns as components
-    - choose the combination where row-wise component sums best match the candidate column
-
-    Returns:
-      {
-        "dav": ...,
-        "oav": ...,
-        "e": ...,
-        "sc": ...
-      }
-    or {} if no plausible aggregation structure is found.
-    """
     numeric_map = _get_numeric_series_map(df)
     cols = list(numeric_map.keys())
 
-    # Require at least 4 numeric columns:
-    # one aggregate candidate + at least 2 components + usually one id/extra column
-    if len(cols) < 4:
+    # Require at least 3 numeric columns:
+    if len(cols) < 3:
         return {}
 
     best: Optional[Dict[str, Any]] = None
