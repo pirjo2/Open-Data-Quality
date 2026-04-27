@@ -2,7 +2,6 @@ meta:
   name: Vetrò et al. (2016) Open Data Quality Measurement Framework
   file_purpose: Machine-readable definition of Vetrò metrics (structured expression trees) for automated scoring.
   notes:
-    - All expressions are represented as operator trees (Option B).
     - Symbol 's' is reserved for Source presence (0/1). Symbol 'sc' is used for Scale in accuracy_in_aggregation to avoid collision.
     - Some portal/metadata-derived inputs may be provided manually or inferred via LLM prompts in the runner script.
     - Currentness delay metrics are represented as quality scores where higher is better and values are clamped to [0,1].
@@ -389,17 +388,17 @@ vetro_methodology:
               then: ea
             - else: 1
 
-  completeness.percentage_of_complete_cells: "Complete cells (%)"
-  completeness.percentage_of_complete_rows: "Complete rows (%)"
-  accuracy.accuracy_in_aggregation: "Accuracy in aggregation (%)"
-  accuracy.percentage_of_syntactically_accurate_cells: "Syntactically valid cells (%)"
-  traceability.track_of_creation: "Creation traceability"
-  traceability.track_of_updates: "Update traceability"
-  currentness.percentage_of_current_rows: "Current rows (%)"
-  currentness.delay_in_publication: "Publication timeliness"
-  currentness.delay_after_expiration: "Freshness after expiration"
-  compliance.five_stars_open_data: "5-star open data"
-  compliance.percentage_of_standardized_columns: "Standardized columns (%)"
-  compliance.egms_compliance: "eGMS compliance"
-  understandability.percentage_of_columns_with_metadata: "Metadata coverage"
-  understandability.percentage_of_columns_in_comprehensible_format: "Comprehensible columns (%)"
+  completeness.percentage_of_complete_cells: "Percentage of complete cells"
+  completeness.percentage_of_complete_rows: "Percentage of complete rows"
+  accuracy.accuracy_in_aggregation: "Accuracy in aggregation"
+  accuracy.percentage_of_syntactically_accurate_cells: "Percentage of accurate cells"
+  traceability.track_of_creation: "Track of creation"
+  traceability.track_of_updates: "Track of updates"
+  currentness.percentage_of_current_rows: "Percentage of current rows"
+  currentness.delay_in_publication: "Delay in publication"
+  currentness.delay_after_expiration: "Delay after expiration"
+  compliance.five_stars_open_data: "Five star Open Data"
+  compliance.percentage_of_standardized_columns: "Percentage of standardized columns"
+  compliance.egms_compliance: "eGMS Compliance"
+  understandability.percentage_of_columns_with_metadata: "Percentage of columns with metadata"
+  understandability.percentage_of_columns_in_comprehensible_format: "Percentage of columns in comprehensible format"

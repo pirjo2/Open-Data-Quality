@@ -720,7 +720,7 @@ def compute_metrics(
             details["symbol_source"]["edp"] = "parser"
             _record_symbol_trace("edp", edp_val, "parser", evidence=f"Parsed from temporalcoverage: {cov}")
 
-    # --------- PRIORITY RESOLUTION: auto -> trino -> manual -> missing ----------
+    # --------- PRIORITY RESOLUTION: manual metadata -> normalized Trino metadata -> auto inputs -> missing -> LLM fallback ----------
     details["llm_debug"] = {
         "use_llm": use_llm,
         "llm_runner_available": llm_runner is not None,

@@ -6,7 +6,6 @@ import yaml
 
 
 def load_yaml(path: str) -> Dict[str, Any]:
-    """Generic YAML loader (backwards compatible)."""
     p = Path(path)
     with p.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
