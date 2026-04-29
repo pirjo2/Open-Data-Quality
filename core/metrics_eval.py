@@ -583,6 +583,27 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
 
     return auto
 
+def _safe_sample_values(series: pd.Series, n: int = 3) -> list:
+    values = []
+    seen = set()
+
+    for x in series.dropna():
+        safe_x = _to_json_safe(x)
+
+        if isinstance(safe_x, (list, dict)):
+            key = json.dumps(safe_x, sort_keys=True, default=str)
+        else:
+            key = str(safe_x)
+
+        if key not in seen:
+            seen.add(key)
+            values.append(safe_x)
+
+        if len(values) >= n:
+            break
+
+    return values
+
 def compute_metrics(
     df: pd.DataFrame,
     formulas_cfg: Dict[str, Any],
@@ -808,7 +829,7 @@ def compute_metrics(
                 s = df[col]
                 dtype = str(s.dtype)
                 missing_ratio = float(s.isna().mean())
-                sample_vals = _to_json_safe(list(s.dropna().unique()[:3]))                
+                sample_vals = _safe_sample_values(s, n=3)              
                 context_lines.append(
                     f"- {col}: dtype={dtype}, missing={missing_ratio:.3f}, samples={sample_vals}"
                 )
