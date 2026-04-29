@@ -765,7 +765,13 @@ if run_btn:
                     prompt_regime=prompt_regime,
                 )
                 def _is_empty_or_weak_manual_value(x):
-                    return x is None or x == "" or x in {0, 0.0}
+                    if x is None:
+                        return True
+                    if x == "":
+                        return True
+                    if isinstance(x, (list, dict, tuple, set)):
+                        return len(x) == 0
+                    return x in {0, 0.0}
 
                 merged_manual_metadata = dict(manual_metadata)
 
