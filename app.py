@@ -843,7 +843,7 @@ if run_btn:
             st.error("No data could be loaded from the selected data source.")
             st.stop()
 
-        df_preview = make_arrow_safe(df.head(20).copy())
+        df_preview = make_arrow_safe(df.head(200).copy())
 
         if ext is None:
             ext = ".table"
