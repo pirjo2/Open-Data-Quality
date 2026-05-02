@@ -506,9 +506,22 @@ def _finalise_metric_result(
     Partial metrics:
         if the normalised value is computable, keep it even when some
         required inputs are missing.
+
+    All final metric scores are clamped to the 0-1 range.
     """
     if normalised_value is None:
         return None
+
+    try:
+        normalised_value = float(normalised_value)
+    except Exception:
+        return None
+
+    if math.isnan(normalised_value):
+        return None
+
+    # Quality scores should stay between 0 and 1.
+    normalised_value = max(0.0, min(1.0, normalised_value))
 
     if _metric_allows_partial_result(metric_id):
         return normalised_value
