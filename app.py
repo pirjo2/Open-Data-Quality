@@ -133,6 +133,76 @@ def inject_css() -> None:
     st.markdown(
         """
         <style>
+            /* Force light background even if the user has dark mode enabled */
+            .stApp,
+            [data-testid="stAppViewContainer"],
+            [data-testid="stHeader"],
+            [data-testid="stToolbar"],
+            [data-testid="stSidebar"],
+            [data-testid="stSidebarContent"],
+            [data-testid="stBottomBlockContainer"],
+            .main,
+            .block-container {
+                background-color: #ffffff !important;
+                color: #111827 !important;
+            }
+
+            /* General text */
+            h1, h2, h3, h4, h5, h6,
+            p, span, label, div, li,
+            .stMarkdown,
+            .stText,
+            .stCaption {
+                color: #111827 !important;
+            }
+
+            /* Inputs and dropdowns */
+            input,
+            textarea,
+            select,
+            div[data-baseweb="input"],
+            div[data-baseweb="textarea"],
+            div[data-baseweb="select"],
+            div[data-baseweb="base-input"] {
+                background-color: #ffffff !important;
+                color: #111827 !important;
+                border-color: #d1d5db !important;
+            }
+
+            input::placeholder,
+            textarea::placeholder {
+                color: #6b7280 !important;
+            }
+
+            /* Buttons */
+            button {
+                color: #111827 !important;
+            }
+
+            /* App cards and custom blocks */
+            .top-note,
+            .summary-card,
+            .dimension-pill,
+            div[data-testid="stExpander"],
+            div[data-testid="stTabs"],
+            div[data-testid="stDataFrame"],
+            div[data-testid="stMetric"],
+            div[data-testid="stAlert"] {
+                background-color: #ffffff !important;
+                color: #111827 !important;
+            }
+
+            .top-note *,
+            .summary-card *,
+            .dimension-pill * {
+                color: #111827 !important;
+            }
+
+            /* Code/debug blocks */
+            pre, code {
+                background-color: #f9fafb !important;
+                color: #111827 !important;
+            }
             .block-container {
                 padding-top: 1.5rem;
                 padding-bottom: 2rem;
@@ -539,6 +609,7 @@ def get_metadata_placeholder() -> str:
 
 
 st.set_page_config(page_title="Open Data Quality", layout="wide")
+px.defaults.template = "plotly_white"
 inject_css()
 
 st.title("Open Data Quality")
@@ -642,18 +713,26 @@ with ai_row_1b:
 
 with ai_row_1c:
     openai_api_key: Optional[str] = None
+
     if llm_provider == "openai":
-        llm_model_name = st.selectbox(
-            "Model name",
-            options=OPENAI_MODEL_OPTIONS,
-            index=0,
-        )
+        model_options = OPENAI_MODEL_OPTIONS
     else:
-        llm_model_name = st.selectbox(
-            "Model name",
-            options=HF_MODEL_OPTIONS,
-            index=0,
-        )
+        model_options = HF_MODEL_OPTIONS
+
+    selected_model = st.selectbox(
+        "Model name",
+        options=model_options + ["Custom model name"],
+        index=0,
+    )
+
+    if selected_model == "Custom model name":
+        llm_model_name = st.text_input(
+            "Custom model name",
+            value="",
+            placeholder="For example: gpt-4.1-mini or another available model",
+        ).strip()
+    else:
+        llm_model_name = selected_model
 
 ai_row_2a, ai_row_2b = st.columns([4, 1.5], gap="large")
 with ai_row_2a:
@@ -665,7 +744,7 @@ with ai_row_2a:
             except Exception:
                 openai_api_key = ""
         if not openai_api_key:
-            openai_api_key = os.getenv("OPENAI_API_KEY", "")
+            openai_api_key = os.getenv("OPENAI_API_KEY", "")      
     else:
         st.text_input("API key", value="Not required for local Hugging Face setup.", disabled=True)
 
@@ -673,17 +752,22 @@ with ai_row_2b:
     st.markdown("<div style='height: 1.9rem;'></div>", unsafe_allow_html=True)
     test_clicked = st.button("Test connection", width="stretch")
     if test_clicked:
-        try:
-            runner = get_llm_runner(
-                provider=llm_provider,
-                model_name=llm_model_name,
-                api_key=openai_api_key,
-            )
-            raw = runner("Return exactly 3 lines:\\nanswer: 1\\nconfidence: 0.9\\nevidence: test", 64)
-            st.success("Connection worked.")
-            st.code(raw)
-        except Exception as exc:
-            st.error(f"Connection test failed: {exc}")
+        if not llm_model_name:
+            st.error("Please enter a model name.")
+        elif llm_provider == "openai" and not openai_api_key:
+            st.error("Please enter an OpenAI API key or configure OPENAI_API_KEY.")
+        else:
+            try:
+                runner = get_llm_runner(
+                    provider=llm_provider,
+                    model_name=llm_model_name,
+                    api_key=openai_api_key,
+                )
+                raw = runner("Return exactly 3 lines:\nanswer: 1\nconfidence: 0.9\nevidence: test", 64)
+                st.success("Connection worked.")
+                st.code(raw)
+            except Exception as exc:
+                st.error(f"Connection test failed: {exc}")
 
 st.subheader("Optional metadata")
 meta_upload_col, meta_text_col = st.columns([1, 2], gap="large")
@@ -723,7 +807,9 @@ if run_btn:
         if llm_provider == "openai" and not openai_api_key:
             st.error("Please enter an OpenAI API key or configure OPENAI_API_KEY in Streamlit secrets or environment variables.")
             st.stop()
-
+        if not llm_model_name:
+            st.error("Please enter a model name.")
+            st.stop()
         manual_meta_file_raw, manual_meta_file_text = parse_uploaded_metadata_file(manual_meta_file)
         manual_text_raw = parse_manual_metadata_text(manual_meta_text)
 
