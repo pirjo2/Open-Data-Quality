@@ -143,6 +143,7 @@ This script was mainly used for thesis-related testing and for comparing differe
 - Scores are normalized to the range 0–1 where possible.
 - The Streamlit app is the main user-facing part of the project.
 - The scripts folder contains additional tools used during development and thesis experiments.
+- AI tools were used to support code explanation, troubleshooting and the exploration of possible implementation solutions. Final decisions and code changes were made by the author.
 
 ## Author
 
