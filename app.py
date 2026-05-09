@@ -149,7 +149,7 @@ def inject_css() -> None:
 
             /* General text */
             h1, h2, h3, h4, h5, h6,
-            p, span, label, div, li,
+            p, span, label, li,
             .stMarkdown,
             .stText,
             .stCaption {
@@ -159,14 +159,27 @@ def inject_css() -> None:
             /* Inputs and dropdowns */
             input,
             textarea,
-            select,
-            div[data-baseweb="input"],
-            div[data-baseweb="textarea"],
-            div[data-baseweb="select"],
-            div[data-baseweb="base-input"] {
+            select {
                 background-color: #ffffff !important;
                 color: #111827 !important;
                 border-color: #d1d5db !important;
+            }
+
+            /* Streamlit selectbox */
+            div[data-baseweb="select"] > div {
+                background-color: #ffffff !important;
+                color: #111827 !important;
+                border-color: #d1d5db !important;
+                box-shadow: none !important;
+            }
+
+            div[data-baseweb="select"] span {
+                color: #111827 !important;
+            }
+
+            div[role="listbox"] {
+                background-color: #ffffff !important;
+                color: #111827 !important;
             }
 
             input::placeholder,
