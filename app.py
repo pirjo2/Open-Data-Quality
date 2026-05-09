@@ -15,9 +15,9 @@ import yaml
 from core.llm import get_llm_runner, infer_manual_metadata_symbols
 from core.metadata_utils import (
     dataframe_to_metadata_dict,
-    #extract_symbols_from_realistic_text,
+    extract_symbols_from_realistic_text,
     normalize_metadata_to_symbols,
-    #parse_kv_metadata,
+    parse_kv_metadata,
     parse_text_metadata_content,
 )
 from core.pipeline import run_quality_assessment
