@@ -203,16 +203,16 @@ vetro_methodology:
     percentage_of_standardized_columns:
       description: Indicates the percentage of standardized columns in a dataset. It considers only columns that represent information with associated standards.
       inputs:
-        - number_of_columns_with_standards: ns
-        - number_of_standardized_columns: nsc
+        - number_of_columns_with_standards: nsc
+        - number_of_standardized_columns: ns
       formula:
         assign: psc
         expression:
           operator: multiply
           left:
             operator: divide
-            left: nsc
-            right: ns
+            left: ns
+            right: nsc
           right: 100
       normalization:
         assign: pscn

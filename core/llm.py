@@ -142,13 +142,6 @@ def parse_llm_symbol_response(
     return values, evidence, confidence
 
 def parse_llm_json_loose(raw_text: str) -> Dict[str, Any]:
-    """
-    Parse either:
-    1) one valid JSON object
-    2) multiple JSON objects concatenated together
-
-    Merge __evidence__ and __confidence__ maps when needed.
-    """
     if not raw_text or not str(raw_text).strip():
         return {}
 

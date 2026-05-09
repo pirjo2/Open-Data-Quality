@@ -548,17 +548,8 @@ def _auto_inputs(df: pd.DataFrame, file_ext: Optional[str] = None) -> Dict[str, 
 
     # Accuracy: simple baseline
 
-    # Currentness: detect a primary date column
-        # ------------------------------------------------------------------
-    # AI-first approach:
-    # Do NOT hard-code semantic interpretation from column names here.
-    # Keep only deterministic table statistics in _auto_inputs().
-    # Semantic symbols will be inferred later from:
-    # - raw manual metadata text
-    # - Trino metadata
-    # - column profiles
-    # - sample rows
-    # ------------------------------------------------------------------
+# Auto-derived structural values are calculated directly from the dataframe.
+# Semantic values are filled later from metadata, Trino data, or LLM fallback.
 
     # Currentness / publication / expiration
     auto["ncr"] = None
@@ -808,8 +799,6 @@ def compute_metrics(
 
         # Collect symbols first
         for sym in sorted(required_symbols):
-            #if sym not in prompt_defs:
-                #continue
 
             source = details["symbol_source"].get(sym)
             val = details["symbol_values"].get(sym)
