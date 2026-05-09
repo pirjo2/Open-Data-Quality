@@ -1,66 +1,42 @@
 # Open Data Quality
 
-A Streamlit-based prototype for assessing the quality of open datasets using a YAML-driven implementation of the Vetrò et al. open data quality framework. The project was developed as part of the master's thesis **“Assessing the quality of open data using artificial intelligence based methods”**.
+This repository contains a Streamlit application for assessing the quality of open datasets. The project was created as part of the master's thesis **“Assessing the quality of open data using artificial intelligence based methods”**.
 
 Live application: https://avaandmete-kvaliteet.streamlit.app/
 
-## Overview
+## This project
 
-The application supports semi-automated open data quality assessment. It combines rule-based checks, metadata-based interpretation and optional AI-assisted inference for quality indicators that cannot be derived directly from the dataset structure.
+The application helps to assess open data quality in a more structured way. It is based on the open data quality framework by Vetrò et al., but the framework has been adapted into a practical YAML-based implementation.
 
-The assessment logic is based on configurable YAML files instead of hard-coded formulas. This makes it easier to inspect, adapt and extend the implemented quality metrics.
+The goal of the project is not to fully automate all open data quality assessment. Instead, the application combines:
+
+- rule-based checks from the dataset itself,
+- metadata-based checks,
+- AI-assisted inference for indicators that are harder to calculate automatically.
+
+The app can be used with uploaded files, and it also has an advanced Trino option for working with datasets from the Estonian open data infrastructure.
 
 ## Main features
 
-- Upload-based dataset assessment through a Streamlit interface.
-- Advanced Trino SQL query option for assessing datasets from the Estonian open data infrastructure.
-- YAML-based metric formulas and prompt templates.
-- Quality dimensions based on the adapted Vetrò et al. framework:
-  - traceability
-  - currentness
-  - completeness
-  - compliance
-  - understandability
-  - accuracy
-- Support for structural checks, metadata extraction and AI-assisted fallback inference.
-- Metric-level results, dimension-level overview, debug information and improvement suggestions.
-- Synthetic PLUS/MINUS test cases for evaluating the implemented metrics and prompting regimes.
-
-## Project structure
-
-```text
-Open-Data-Quality/
-├── app.py
-├── configs/
-│   ├── formulas.yaml
-│   └── prompts.yaml
-├── core/
-│   ├── pipeline.py
-│   ├── metrics_eval.py
-│   ├── llm.py
-│   ├── metadata_utils.py
-│   └── utils.py
-├── scripts/
-│   ├── run_experiments.py
-│   └── run_trino_batch_assessment_v2.py
-├── testkomplekt/
-│   └── vetro_tests/
-├── requirements.txt
-├── runtime.txt
-└── README.md
-```
+- Upload-based dataset assessment in Streamlit.
+- Advanced Trino SQL query option.
+- YAML-based metric definitions and formulas.
+- AI-assisted inference for missing semantic quality inputs.
+- Quality scores by metric and dimension.
+- Debug information for checking how the result was calculated.
+- Synthetic PLUS/MINUS test cases for testing the implemented metrics.
 
 ## Requirements
 
 The project is intended to run with Python 3.11.
 
-Install dependencies with:
+Install the required packages with:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Running locally
+## Running the Streamlit app locally
 
 Clone the repository:
 
@@ -69,31 +45,13 @@ git clone https://github.com/pirjo2/Open-Data-Quality.git
 cd Open-Data-Quality
 ```
 
-Create and activate a virtual environment:
-
-```bash
-python -m venv .venv
-```
-
-On Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-On macOS/Linux:
-
-```bash
-source .venv/bin/activate
-```
-
 Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Run the Streamlit app:
+Run the application:
 
 ```bash
 streamlit run app.py
@@ -101,9 +59,11 @@ streamlit run app.py
 
 ## Using AI-assisted inference
 
-The application can use AI models to infer missing semantic quality indicators from metadata and dataset context.
+The application can use AI to infer missing quality inputs from metadata and dataset context.
 
-For OpenAI-based inference, provide an API key either through the Streamlit interface or as an environment variable:
+For OpenAI-based inference, provide an API key either in the Streamlit interface or as an environment variable.
+
+On macOS/Linux:
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
@@ -115,17 +75,54 @@ On Windows PowerShell:
 $env:OPENAI_API_KEY="your-api-key"
 ```
 
-If deployed on Streamlit Cloud, the key can be configured in the app secrets.
+## Using the Trino option
 
-## Trino option
+The Trino option is meant for accessing datasets from the Estonian open data infrastructure. This access is not public by default.
 
-The application also includes an advanced Trino SQL query mode. This is intended for assessing datasets that are accessible through the Estonian open data infrastructure.
+To use Trino, a username and password are needed. These credentials can be requested from **Kristjan Lõhmus**.
 
-The Trino option is optional and mainly intended for advanced users or batch assessment workflows.
+The Trino connection uses these environment variables:
+
+- `TRINO_USER`
+- `TRINO_PASSWORD`
+
+On macOS/Linux:
+
+```bash
+export TRINO_USER="your-trino-username"
+export TRINO_PASSWORD="your-trino-password"
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:TRINO_USER="your-trino-username"
+$env:TRINO_PASSWORD="your-trino-password"
+```
+
+## Running the Trino batch assessment script
+
+The batch script is located here:
+
+```text
+scripts/run_trino_batch_assessment_v2.py
+```
+
+Example command for a small test run:
+
+```bash
+python scripts/run_trino_batch_assessment_v2.py --sample-rows 100 --max-datasets 5 --use-llm --llm-provider openai --llm-model gpt-4.1-mini
+```
+
+The script saves results under:
+
+```text
+outputs/trino_batch_assessment/
+```
 
 ## Running synthetic experiments
 
-Synthetic metric test cases are located in:
+Synthetic test cases are located in:
 
 ```text
 testkomplekt/vetro_tests/
@@ -137,18 +134,19 @@ To run the experiment script:
 python scripts/run_experiments.py
 ```
 
-The script is mainly intended for thesis-related testing and comparison of prompting regimes or model configurations.
+This script was mainly used for thesis-related testing and for comparing different prompting regimes or model configurations.
 
 ## Notes
 
-- The metric definitions are stored in `configs/formulas.yaml`.
+- Metric definitions are stored in `configs/formulas.yaml`.
 - Prompt templates are stored in `configs/prompts.yaml`.
 - Scores are normalized to the range 0–1 where possible.
-- The Streamlit app is the main user-facing interface.
-- The scripts folder contains supporting evaluation and batch-processing tools used during development and thesis experiments.
+- The Streamlit app is the main user-facing part of the project.
+- The scripts folder contains additional tools used during development and thesis experiments.
 
 ## Author
 
 Pirjo Vainjärv  
 University of Tartu  
-Master's thesis project
+Master's thesis
+Superviser: Kristo Raun
