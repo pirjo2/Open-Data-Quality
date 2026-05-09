@@ -147,6 +147,32 @@ def inject_css() -> None:
                 color: #111827 !important;
             }
 
+            /* Hide Streamlit heading anchor / hyperlink icons */
+            [data-testid="stHeaderActionElements"],
+            h1 a,
+            h2 a,
+            h3 a,
+            h4 a,
+            h5 a,
+            h6 a {
+                display: none !important;
+                visibility: hidden !important;
+            }
+
+            /* Make links look like normal text if Streamlit creates any automatically */
+            a {
+                color: inherit !important;
+                text-decoration: none !important;
+            }
+
+            /* Hide possible add/plus button in file uploader after one file is selected */
+            section[data-testid="stFileUploader"] button[title*="Add"],
+            section[data-testid="stFileUploader"] button[aria-label*="Add"],
+            section[data-testid="stFileUploader"] button[title*="Add"],
+            section[data-testid="stFileUploader"] button[aria-label*="Add"] {
+                display: none !important;
+            }
+
             /* General text */
             h1, h2, h3, h4, h5, h6,
             p, span, label, li,
@@ -668,9 +694,11 @@ trino_meta_sql = ""
 
 if data_source == UPLOAD_MODE:
     uploaded_file = st.file_uploader(
-        "Input file",
-        type=COMMON_FILE_TYPES,
-    )
+    "Input file",
+    type=COMMON_FILE_TYPES,
+    accept_multiple_files=False,
+    help=SUPPORTED_FILE_TYPES_HELP,
+)
 else:
     trino_left_col, trino_right_col = st.columns([1, 1.6], gap="large")
 
@@ -789,6 +817,7 @@ with meta_upload_col:
     manual_meta_file = st.file_uploader(
         "Metadata file",
         type=COMMON_FILE_TYPES,
+        accept_multiple_files=False,
         help=METADATA_FILE_HELP,
     )
 
