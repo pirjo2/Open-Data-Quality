@@ -35,8 +35,8 @@ SYMBOL_HINTS: Dict[str, str] = {
     "du": "dates of updates are explicitly present",
 
     "ncr": "number of rows that are not current",
-    "ns": "number of columns for which a standard should apply",
-    "nsc": "number of standardized columns",
+    "ns": "number of standardized columns",
+    "nsc": "number of columns for which a standard should apply",
     "ncm": "number of columns that have metadata/description",
     "ncuf": "number of columns in comprehensible format",
     "nce": "number of cells that are inaccurate or syntactically invalid",

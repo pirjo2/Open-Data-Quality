@@ -33,19 +33,26 @@ import yaml
 
 # Muuda siin oma jooksuvalikud
 MODEL_SPECS = [
-    {"provider": "openai", "model": "gpt-4.1"},
+    #{"provider": "openai", "model": "gpt-4.1"},
     {"provider": "openai", "model": "gpt-4.1-mini"},
-    {"provider": "openai", "model": "gpt-5-mini"},
-    {"provider": "openai", "model": "gpt-5"},
-    {"provider": "huggingface", "model": "google/flan-t5-small"},
-    {"provider": "huggingface", "model": "google/flan-t5-base"},
-    {"provider": "huggingface", "model": "google/flan-t5-large"},
+    #{"provider": "openai", "model": "gpt-5-mini"},
+    #{"provider": "openai", "model": "gpt-5"},
+    #{"provider": "huggingface", "model": "google/flan-t5-small"},
+    #{"provider": "huggingface", "model": "google/flan-t5-base"},
+    #{"provider": "huggingface", "model": "google/flan-t5-large"},
+    #{"provider": "huggingface", "model": "bigscience/mt0-small"},
+    #{"provider": "huggingface", "model": "bigscience/mt0-base"},
+    #{"provider": "huggingface", "model": "bigscience/mt0-large"},
+    #{"provider": "ollama", "model": "qwen2.5:1.5b-instruct"},
+    #{"provider": "ollama", "model": "qwen2.5:1.3b-instruct"},
+    #{"provider": "ollama", "model": "qwen2.5:1.7b-instruct"},
+    #{"provider": "ollama", "model": "qwen2.5:3b-instruct"},
 ]
 
 PROMPT_REGIMES = [
     "zero_shot",
-    "few_shot",
-    "reasoning",
+    #"few_shot",
+    #"reasoning",
 ]
 
 USE_LLM = True
@@ -66,10 +73,19 @@ def utc_now_iso() -> str:
 
 def load_table(path: Path) -> pd.DataFrame:
     ext = path.suffix.lower()
+
     if ext in {".csv", ".tsv", ".txt"}:
-        return pd.read_csv(path, sep=None, engine="python")
+        for encoding in ("utf-8", "utf-8-sig", "cp1257", "cp1252", "latin1"):
+            try:
+                return pd.read_csv(path, sep=None, engine="python", encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+
+        return pd.read_csv(path, sep=None, engine="python", encoding="utf-8", encoding_errors="replace")
+
     if ext in {".xls", ".xlsx"}:
         return pd.read_excel(path)
+
     raise ValueError(f"Unsupported dataset type: {ext}")
 
 
@@ -329,9 +345,43 @@ def main() -> None:
     summary_df = pd.DataFrame(summary_rows)
     metrics_long_df = pd.DataFrame(metric_rows)
 
+    #if metrics_long_df.empty:
+    #    raise RuntimeError(
+    #        "metrics_long_df is empty. No metric rows were collected."
+    #    )
     if metrics_long_df.empty:
+        print("\nERROR: metrics_long_df is empty. No metric rows were collected.")
+
+        summary_df = pd.DataFrame(summary_rows)
+
+        if not summary_df.empty:
+            print("\nSummary rows:")
+            print(summary_df.head(30).to_string(index=False))
+
+            error_cols = [
+                col for col in [
+                    "case_id",
+                    "label",
+                    "dataset_file",
+                    "provider",
+                    "model",
+                    "prompt_regime",
+                    "status",
+                    "error",
+                ]
+                if col in summary_df.columns
+            ]
+
+            if error_cols:
+                print("\nErrors:")
+                print(summary_df[error_cols].head(30).to_string(index=False))
+
+            out_dir.mkdir(parents=True, exist_ok=True)
+            summary_df.to_csv(out_dir / "summary_errors_only.csv", index=False)
+            print(f"\nSaved error summary to: {out_dir / 'summary_errors_only.csv'}")
+
         raise RuntimeError(
-            "metrics_long_df is empty. No metric rows were collected."
+            "metrics_long_df is empty. Most likely all experiment cases failed before metric rows were collected."
         )
 
     target_metric_map = {

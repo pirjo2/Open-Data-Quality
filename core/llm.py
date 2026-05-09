@@ -7,6 +7,8 @@ import os
 import re
 import time
 import yaml
+import urllib.request
+import urllib.error
 
 DATE_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b", re.I)
 JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -261,6 +263,48 @@ def get_hf_runner(model_name: str) -> Callable[[str, int], str]:
             return text
 
     return runner
+def get_ollama_runner(
+    model_name: str,
+    base_url: str = "http://localhost:11434",
+    timeout: int = 180,
+):
+    """
+    Returns a callable LLM runner for local Ollama models.
+
+    The returned function accepts *args and **kwargs because the existing
+    pipeline may call LLM runners with additional parameters.
+    """
+
+    def run_ollama(prompt: str, *args, **kwargs) -> str:
+        payload = {
+            "model": model_name,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0
+            },
+        }
+
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/api/generate",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+
+            return data.get("response", "")
+
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                "Ollama request failed. Make sure Ollama is running locally "
+                f"and the selected model has been pulled: {model_name}"
+            ) from e
+
+    return run_ollama
 
 def get_openai_runner(
     model_name: str,
@@ -332,6 +376,9 @@ def get_llm_runner(
 
     if provider == "huggingface":
         return get_hf_runner(model_name=model_name)
+    
+    if provider == "ollama":
+        return get_ollama_runner(model_name=model_name)
 
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
