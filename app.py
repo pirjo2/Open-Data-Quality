@@ -744,19 +744,17 @@ else:
         trino_sql = st.text_area(
             "Data query",
             height=250,
-            placeholder="SELECT * FROM some_table LIMIT 100000",
-        )
+            placeholder=
+                "SELECT *\n"
+                "  FROM "landing"."<table_schema>"."<table_name>"\n"
+                "  LIMIT 100000"),
         trino_meta_sql = st.text_area(
             "Metadata query",
             height=250,
             placeholder=(
-                "SELECT\n"
-                "  title,\n"
-                "  notes AS description,\n"
-                "  metadata_created,\n"
-                "  metadata_modified,\n"
-                "  organization.name AS publisher\n"
+                "SELECT *\n"
                 "FROM landing.avaandmete_portaal.dataset_metadata\n"
+                "WHERE id = '<metadata_id>'\n"
                 "LIMIT 1"
             ),
         )
