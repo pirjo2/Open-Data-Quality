@@ -186,17 +186,47 @@ def inject_css() -> None:
             input,
             textarea,
             select {
-                background-color: #ffffff !important;
+                background-color: #f3f4f6 !important;
                 color: #111827 !important;
                 border-color: #d1d5db !important;
             }
 
             /* Streamlit selectbox */
             div[data-baseweb="select"] > div {
-                background-color: #ffffff !important;
+                background-color: #f3f4f6 !important;
                 color: #111827 !important;
                 border-color: #d1d5db !important;
                 box-shadow: none !important;
+            }
+
+            /* Input-like boxes should be light grey, not pure white */
+            div[data-baseweb="base-input"],
+            div[data-baseweb="input"],
+            div[data-baseweb="textarea"],
+            div[data-testid="stTextInput"] input,
+            div[data-testid="stNumberInput"] input,
+            div[data-testid="stTextArea"] textarea {
+                background-color: #f3f4f6 !important;
+                color: #111827 !important;
+            }
+
+            /* File uploader box */
+            section[data-testid="stFileUploader"] {
+                background-color: #f9fafb !important;
+                border: 1px solid #d1d5db !important;
+                border-radius: 0.75rem !important;
+            }
+
+            /* File uploader inner drop area */
+            section[data-testid="stFileUploader"] div {
+                color: #111827 !important;
+            }
+
+            /* Expanders and larger control containers */
+            div[data-testid="stExpander"] {
+                background-color: #f9fafb !important;
+                border: 1px solid #e5e7eb !important;
+                border-radius: 0.75rem !important;
             }
 
             div[data-baseweb="select"] span {
