@@ -746,8 +746,8 @@ else:
             height=250,
             placeholder=(
                 "SELECT *\n"
-                "  FROM 'landing'.'<table_schema>'.'<table_name>'\n"
-                "  LIMIT 100000"
+                "  FROM landing.'<table_schema>'.'<table_name>'\n"
+                "  LIMIT 10000"
             ),
         )
         trino_meta_sql = st.text_area(
